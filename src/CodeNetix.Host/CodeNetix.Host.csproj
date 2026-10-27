@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <AssemblyName>codenetix</AssemblyName>
+    <RootNamespace>CodeNetix.Host</RootNamespace>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="CodeNetix.Host.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\CodeNetix.Contracts\CodeNetix.Contracts.csproj" />
+    <ProjectReference Include="..\CodeNetix.Ingestion\CodeNetix.Ingestion.csproj" />
+    <ProjectReference Include="..\CodeNetix.Pipeline\CodeNetix.Pipeline.csproj" />
+    <ProjectReference Include="..\CodeNetix.Agents\CodeNetix.Agents.csproj" />
+    <ProjectReference Include="..\CodeNetix.Sandbox\CodeNetix.Sandbox.csproj" />
+    <ProjectReference Include="..\CodeNetix.GitHub\CodeNetix.GitHub.csproj" />
+    <ProjectReference Include="..\CodeNetix.Persistence\CodeNetix.Persistence.csproj" />
+  </ItemGroup>
+
+</Project>
