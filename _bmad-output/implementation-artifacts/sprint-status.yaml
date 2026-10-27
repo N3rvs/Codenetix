@@ -1,0 +1,93 @@
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created, ready for development
+#   - in-progress: Developer actively working on implementation
+#   - review: Implementation complete, ready for review
+#   - done: Story completed
+
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+
+# Action Item Status:
+#   - open: Committed during a retrospective, not yet addressed
+#   - in-progress: Actively being worked on
+#   - done: Completed
+
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when its first story starts (via build's sprint sync)
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates the next story after the previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+# - Retrospective appends its action items to action_items; the status view surfaces open ones
+generated: 10-27-2026 12:00
+last_updated: 10-27-2026 12:00
+project: Codenetix
+project_key: NOKEY
+tracking_system: file-system
+story_location: C:\dev\Codenetix/_bmad-output/implementation-artifacts
+development_status:
+  epic-1: backlog
+  1-1-arrancar-codenetix-con-un-comando: backlog
+  1-2-configurar-la-instancia-y-modo-diagnóstico: backlog
+  1-3-acceso-seguro-al-panel-y-la-api: backlog
+  1-4-lanzar-trabajo-con-codenetix-fix: backlog
+  1-5-autorización-del-disparador: backlog
+  1-6-ejecución-con-máquina-de-estados-visible: backlog
+  1-7-clonar-y-leer-la-configuración-del-repositorio: backlog
+  1-8-el-analista-genera-la-spec: backlog
+  1-9-rechazo-temprano-con-aviso-en-la-issue: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-sandbox-efímero-por-ejecución: backlog
+  2-2-red-aislada-y-egress-gateway: backlog
+  2-3-el-programador-implementa-la-spec: backlog
+  2-4-tests-obligatorios-con-reintentos: backlog
+  2-5-prueba-de-fuego-de-seguridad: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-revisores-independientes-emiten-veredictos: backlog
+  3-2-rondas-de-revisión: backlog
+  3-3-pr-con-traza-completa: backlog
+  3-4-clasificación-de-riesgo-determinista: backlog
+  3-5-aviso-en-la-issue-al-terminar: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-cadena-de-montaje-en-vivo: backlog
+  4-2-terminal-en-vivo: backlog
+  4-3-historial-de-ejecuciones: backlog
+  4-4-cancelar-una-ejecución: backlog
+  4-5-lanzar-trabajo-desde-el-panel: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-libro-de-presupuesto-y-coste-visible: backlog
+  5-2-corte-automático-por-presupuesto: backlog
+  5-3-comportamiento-tras-un-reinicio: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-modo-codenetix-action: backlog
+  6-2-acción-composite-publicada: backlog
+  6-3-ci-del-proyecto: backlog
+  6-4-publicación-firmada-de-imágenes: backlog
+  6-5-documentación-de-lanzamiento: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-sondeo-de-issues-etiquetadas: backlog
+  7-2-webhooks-de-github: backlog
+  7-3-sentry-webhooks-y-correspondencia-con-el-repositorio: backlog
+  7-4-contexto-de-sentry-para-el-analista: backlog
+  epic-7-retrospective: optional
