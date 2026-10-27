@@ -127,11 +127,11 @@ Cualquiera puede usar CodeNetix sin servidor y descargar imágenes firmadas. Inc
 Las issues etiquetadas y los errores de Sentry llegan solos, sin lanzar nada a mano.
 **FRs cubiertos:** FR6, FR7, FR8 · **Prioridad:** P1 (después de la preview)
 
-## Épica 1: Instalar y obtener una Spec
+## Epic 1: Instalar y obtener una Spec
 
 El usuario arranca CodeNetix con un único comando, lanza `codenetix fix <issue>` y obtiene una Spec técnica de su issue, con configuración segura, modo diagnóstico y control de quién puede activarlo.
 
-### Historia 1.1: Arrancar CodeNetix con un comando
+### Story 1.1: Arrancar CodeNetix con un comando
 
 Como desarrollador .NET que prueba CodeNetix,
 quiero arrancarlo con un único `docker run` y comprobar que está vivo,
@@ -151,7 +151,7 @@ para empezar a usarlo sin instalar nada más ni crear cuentas.
 **Y** `http://localhost:5000` sirve una página del Panel con un mensaje de bienvenida
 **Y** no existe registro, login ni creación de cuenta
 
-### Historia 1.2: Configurar la instancia y modo diagnóstico
+### Story 1.2: Configurar la instancia y modo diagnóstico
 
 Como operador de CodeNetix,
 quiero configurar mis keys y tokens por variables de entorno y ver claramente si falta algo,
@@ -170,7 +170,7 @@ para no exponer secretos y saber por qué no se procesa nada.
 **Entonces** `ISecretRedactor` lo enmascara (`sk-…abcd`) (AD-13)
 **Y** ningún secreto se escribe en SQLite
 
-### Historia 1.3: Acceso seguro al Panel y la API
+### Story 1.3: Acceso seguro al Panel y la API
 
 Como operador,
 quiero que solo yo pueda usar el Panel y la API,
@@ -191,7 +191,7 @@ para que nadie de mi red pueda lanzar Ejecuciones con mis keys.
 **Cuando** llega una petición a `:5001/webhooks/*`
 **Entonces** esa ruta no exige el token de acceso (la validación de firma llega en la Épica 7)
 
-### Historia 1.4: Lanzar trabajo con `codenetix fix`
+### Story 1.4: Lanzar trabajo con `codenetix fix`
 
 Como desarrollador,
 quiero ejecutar `codenetix fix <url-de-issue>` y que mi petición quede registrada,
@@ -217,7 +217,7 @@ para que CodeNetix empiece a trabajar sobre esa issue.
 **Cuando** Ingestion lo recibe
 **Entonces** solo existe un Evento
 
-### Historia 1.5: Autorización del disparador
+### Story 1.5: Autorización del disparador
 
 Como dueño de un repositorio,
 quiero que solo quien tiene permiso de escritura pueda activar CodeNetix,
@@ -237,7 +237,7 @@ para que nadie inyecte instrucciones maliciosas a través de una issue.
 **Cuando** su texto se pase a un agente en historias posteriores
 **Entonces** Contracts ofrece un tipo `UntrustedText` que solo se puede renderizar dentro de un bloque delimitado como datos (AD-5)
 
-### Historia 1.6: Ejecución con máquina de estados visible
+### Story 1.6: Ejecución con máquina de estados visible
 
 Como desarrollador,
 quiero que cada Evento aceptado se convierta en una Ejecución cuyo estado puedo consultar,
@@ -256,7 +256,7 @@ para saber en qué punto está mi petición.
 **Entonces** ve el Estado y los `RunEvent` en orden de `seq`
 **Y** existen tests de tabla para todas las transiciones válidas e inválidas del diagrama de AD-2
 
-### Historia 1.7: Clonar y leer la configuración del repositorio
+### Story 1.7: Clonar y leer la configuración del repositorio
 
 Como desarrollador,
 quiero que CodeNetix respete el `codenetix.yml` de mi repositorio,
@@ -282,7 +282,7 @@ para controlar las Rutas protegidas, los Revisores y los límites.
 **Cuando** se calcula la `EffectiveConfig`
 **Entonces** prevalece el valor más restrictivo
 
-### Historia 1.8: El Analista genera la Spec
+### Story 1.8: El Analista genera la Spec
 
 Como desarrollador,
 quiero que el Analista convierta mi issue en una Spec técnica precisa,
@@ -308,7 +308,7 @@ para tener claro qué se va a cambiar antes de tocar código.
 **Cuando** la Spec es válida
 **Entonces** la Ejecución termina provisionalmente en `Fallida(StageError)` con el motivo "Programación no disponible", y la historia 2.x sustituye este paso
 
-### Historia 1.9: Rechazo temprano con aviso en la issue
+### Story 1.9: Rechazo temprano con aviso en la issue
 
 Como desarrollador,
 quiero que CodeNetix me diga en la issue cuándo algo no es automatizable,
@@ -325,11 +325,11 @@ para no esperar un PR que nunca llegará.
 **Cuando** GitHub comprueba `gh_notifications`
 **Entonces** solo existe un comentario
 
-## Épica 2: Código y tests en un Sandbox seguro
+## Epic 2: Código y tests en un Sandbox seguro
 
 El Programador (Claude Code) implementa la Spec con tests en un Sandbox aislado, sin internet y sin acceso a las keys reales.
 
-### Historia 2.1: Sandbox efímero por Ejecución
+### Story 2.1: Sandbox efímero por Ejecución
 
 Como desarrollador,
 quiero que el código de mi repositorio solo se ejecute dentro de un contenedor desechable,
@@ -351,7 +351,7 @@ para que nada de lo que haga pueda tocar mi máquina.
 **Cuando** la sesión lo observa
 **Entonces** el contenedor se detiene en 10 s como máximo
 
-### Historia 2.2: Red aislada y Egress Gateway
+### Story 2.2: Red aislada y Egress Gateway
 
 Como desarrollador,
 quiero que el Sandbox no tenga internet y nunca vea mis keys reales,
@@ -373,7 +373,7 @@ para que una issue maliciosa o un test hostil no pueda robarlas ni conectarse a 
 **Entonces** se permite sin inspeccionar el contenido
 **Y** cualquier otro destino se rechaza y se registra como `RunEvent` (FR27)
 
-### Historia 2.3: El Programador implementa la Spec
+### Story 2.3: El Programador implementa la Spec
 
 Como desarrollador,
 quiero que Claude Code implemente la Spec en una rama propia,
@@ -392,7 +392,7 @@ para obtener el cambio sin escribirlo yo.
 **Cuando** el orquestador aplica el resultado
 **Entonces** cuenta como un intento fallido en `PipelineRun` (AD-2)
 
-### Historia 2.4: Tests obligatorios con reintentos
+### Story 2.4: Tests obligatorios con reintentos
 
 Como desarrollador,
 quiero que cada cambio compile, pase los tests e incluya al menos un test nuevo,
@@ -414,7 +414,7 @@ para no recibir código que rompe mi proyecto.
 **Cuando** el orquestador lo aplica
 **Entonces** la Ejecución queda lista para la revisión; hasta la Épica 3 termina provisionalmente en `Fallida(StageError)` con el motivo "Revisión no disponible" y el `TestReport` visible por la API
 
-### Historia 2.5: Prueba de fuego de seguridad
+### Story 2.5: Prueba de fuego de seguridad
 
 Como mantenedor de un proyecto open source,
 quiero tests automáticos que demuestren el aislamiento,
@@ -427,11 +427,11 @@ para poder afirmar en el README que las keys están protegidas.
 **Entonces** solo obtiene la key ficticia, no encuentra ninguna credencial y la conexión externa falla con un `RunEvent` de bloqueo (FR27, NFR1)
 **Y** el test forma parte de la suite que corre en CI
 
-## Épica 3: Revisión independiente y PR
+## Epic 3: Revisión independiente y PR
 
 Tres Revisores independientes auditan el cambio, se hacen Rondas de corrección y se crea un PR con traza completa, clasificación de riesgo y aviso en la issue.
 
-### Historia 3.1: Revisores independientes emiten Veredictos
+### Story 3.1: Revisores independientes emiten Veredictos
 
 Como tech lead,
 quiero que tres Revisores independientes (seguridad, calidad y tests) evalúen cada cambio,
@@ -450,7 +450,7 @@ para detectar problemas antes de que lleguen a mi PR.
 **Entonces** se persiste en `run_verdicts` con `Approved` / `ChangesRequested` / `Rejected` y hallazgos con archivo y línea (FR15)
 **Y** una respuesta inválida tras los reintentos cuenta como `ChangesRequested`
 
-### Historia 3.2: Rondas de revisión
+### Story 3.2: Rondas de revisión
 
 Como tech lead,
 quiero que el Programador corrija lo que piden los Revisores,
@@ -470,7 +470,7 @@ para recibir cambios ya pulidos.
 **Cuando** se aplica la última revisión
 **Entonces** la Ejecución pasa a `Fallida(ReviewRoundsExhausted)`
 
-### Historia 3.3: PR con traza completa
+### Story 3.3: PR con traza completa
 
 Como desarrollador,
 quiero recibir un PR con toda la información de lo que se hizo y por qué,
@@ -488,7 +488,7 @@ para revisarlo y fusionarlo con confianza.
 **Cuando** pasa por el guardián
 **Entonces** se rechaza y queda registrado
 
-### Historia 3.4: Clasificación de riesgo determinista
+### Story 3.4: Clasificación de riesgo determinista
 
 Como tech lead,
 quiero que el PR me avise cuando toca zonas sensibles,
@@ -506,7 +506,7 @@ para revisar con más cuidado lo que importa.
 **Entonces** el título y el cuerpo lo indican junto con las rutas implicadas (FR18)
 **Y** en la v1 el destino es siempre un PR, sea cual sea la clase
 
-### Historia 3.5: Aviso en la issue al terminar
+### Story 3.5: Aviso en la issue al terminar
 
 Como desarrollador,
 quiero ver el resultado en la issue de origen,
@@ -519,11 +519,11 @@ para enterarme sin abrir CodeNetix.
 **Entonces** se publica un único comentario con el enlace al PR o el motivo (`FailureReason`) (FR19)
 **Y** es idempotente por `(runId, kind)` en `gh_notifications`
 
-## Épica 4: Panel en vivo
+## Epic 4: Panel en vivo
 
 El usuario ve la cadena de montaje con el nodo activo, la terminal en directo y el historial, y puede cancelar. **Antes de implementar esta épica, Sally define el diseño visual (`bmad-ux`).**
 
-### Historia 4.1: Cadena de montaje en vivo
+### Story 4.1: Cadena de montaje en vivo
 
 Como desarrollador,
 quiero ver en el Panel cómo avanza mi Ejecución, nodo a nodo,
@@ -542,7 +542,7 @@ para entender qué está haciendo cada agente en cada momento.
 **Y** al reconectar, reanuda con `GET /api/runs/<runId>/events?afterSeq=N` sin perder eventos (AD-3)
 **Y** los tipos de los mensajes se generan desde el OpenAPI (unión discriminada de `RunEvent`) y la prueba de contrato valida cada tipo (AD-14)
 
-### Historia 4.2: Terminal en vivo
+### Story 4.2: Terminal en vivo
 
 Como desarrollador,
 quiero ver la salida del agente y de los tests en directo,
@@ -556,7 +556,7 @@ para seguir el trabajo como si estuviera en mi terminal.
 **Y** los secretos aparecen enmascarados (AD-13)
 **Y** al superar 5 MB por Etapa se muestra el aviso `OutputTruncated`
 
-### Historia 4.3: Historial de Ejecuciones
+### Story 4.3: Historial de Ejecuciones
 
 Como desarrollador,
 quiero consultar las Ejecuciones pasadas,
@@ -569,7 +569,7 @@ para revisar resultados, costes y Veredictos.
 **Entonces** ve el Estado, `FailureReason`, la Spec, los Veredictos, el enlace al PR, la duración y el coste (cuando exista) (FR22)
 **Y** el historial se conserva tras reiniciar el contenedor si el volumen `/data` persiste
 
-### Historia 4.4: Cancelar una Ejecución
+### Story 4.4: Cancelar una Ejecución
 
 Como desarrollador,
 quiero cancelar una Ejecución que va mal,
@@ -586,7 +586,7 @@ para no gastar tokens ni recibir un PR que no quiero.
 **Cuando** se pide la cancelación
 **Entonces** la API responde 409 y el botón aparece deshabilitado
 
-### Historia 4.5: Lanzar trabajo desde el Panel
+### Story 4.5: Lanzar trabajo desde el Panel
 
 Como desarrollador,
 quiero pegar la URL de una issue en el Panel,
@@ -599,11 +599,11 @@ para no tener que usar la terminal.
 **Entonces** el Panel llama a `POST /api/events/manual` con un `requestId` nuevo (AD-4) y navega a la nueva Ejecución
 **Y** las URLs no válidas muestran el mismo error que el CLI
 
-## Épica 5: Control de coste y fiabilidad
+## Epic 5: Control de coste y fiabilidad
 
 Cada Ejecución tiene un presupuesto máximo que la detiene sola, y CodeNetix se comporta correctamente al reiniciarse. Imprescindible antes del lanzamiento público.
 
-### Historia 5.1: Libro de presupuesto y coste visible
+### Story 5.1: Libro de presupuesto y coste visible
 
 Como desarrollador que paga sus propios tokens,
 quiero ver cuánto cuesta cada Ejecución,
@@ -617,7 +617,7 @@ para controlar mi gasto.
 **Y** el coste aparece en la API, en el Panel y en el cuerpo del PR
 **Y** un modelo sin precio conocido se muestra como "no estimable" (incluidos los locales)
 
-### Historia 5.2: Corte automático por presupuesto
+### Story 5.2: Corte automático por presupuesto
 
 Como desarrollador,
 quiero que una Ejecución se pare sola al llegar al presupuesto,
@@ -631,7 +631,7 @@ para no llevarme sustos en la factura.
 **Y** la Ejecución pasa a `Fallida(BudgetExceeded)` (FR13)
 **Y** el CLI de Claude Code se lanza además con `--max-budget-usd <restante>` como segunda barrera
 
-### Historia 5.3: Comportamiento tras un reinicio
+### Story 5.3: Comportamiento tras un reinicio
 
 Como operador,
 quiero que un reinicio no deje Ejecuciones colgadas ni contenedores huérfanos,
@@ -644,11 +644,11 @@ para confiar en que CodeNetix se recupera solo.
 **Entonces** `StartupReconciler` aplica el orden de AD-18: migraciones → salud → Ejecuciones no terminales a `Fallida(HostRestarted)` → limpieza de contenedores `codenetix.run` y volúmenes `codenetix-ws-*` → arranque del Dispatcher (FR24)
 **Y** los Eventos aceptados que aún no tenían Ejecución se procesan después del arranque
 
-## Épica 6: GitHub Action y lanzamiento público (preview)
+## Epic 6: GitHub Action y lanzamiento público (preview)
 
 Cualquiera puede usar CodeNetix sin servidor y descargar imágenes firmadas. Incluye CI, versionado, `SECURITY.md` y un README con los riesgos documentados.
 
-### Historia 6.1: Modo `codenetix action`
+### Story 6.1: Modo `codenetix action`
 
 Como mantenedor de una librería .NET sin servidor,
 quiero ejecutar la factoría completa dentro de GitHub Actions,
@@ -662,7 +662,7 @@ para usarla sin desplegar nada.
 **Y** usa el mismo Pipeline, Sandbox y Gateway, con SQLite temporal
 **Y** vuelca los `RunEvent` a la salida estándar del job
 
-### Historia 6.2: Acción `composite` publicada
+### Story 6.2: Acción `composite` publicada
 
 Como usuario,
 quiero añadir CodeNetix a mi repositorio con unas pocas líneas de YAML,
@@ -676,7 +676,7 @@ para probarlo en minutos.
 **Y** lee la key del Proveedor de los *secrets* del repositorio
 **Y** la documentación incluye un workflow de ejemplo, los permisos necesarios de `GITHUB_TOKEN`, el aviso de que los *secrets* no llegan a forks y el aviso de que los PR creados con `GITHUB_TOKEN` no disparan workflows
 
-### Historia 6.3: CI del proyecto
+### Story 6.3: CI del proyecto
 
 Como mantenedor,
 quiero que cada cambio en CodeNetix se valide automáticamente,
@@ -688,7 +688,7 @@ para publicar versiones fiables.
 **Cuando** se ejecuta el workflow de CI
 **Entonces** se ejecutan el build, `ArchitectureTests`, los tests unitarios, los tests de integración con Docker (incluida la prueba de fuego 2.5) y el build `buildx` para x64 y arm64 de ambas imágenes
 
-### Historia 6.4: Publicación firmada de imágenes
+### Story 6.4: Publicación firmada de imágenes
 
 Como usuario preocupado por la seguridad,
 quiero descargar imágenes firmadas y con SBOM,
@@ -703,7 +703,7 @@ para verificar que no han sido manipuladas.
 **Y** Dependabot (o Renovate) vigila las imágenes base y el CLI de Claude Code
 **Nota:** las imágenes se publican en `ghcr.io/n3rvs/` (OQ-1 resuelta: cuenta de GitHub `N3rvs`)
 
-### Historia 6.5: Documentación de lanzamiento
+### Story 6.5: Documentación de lanzamiento
 
 Como nuevo usuario,
 quiero un README que me lleve al primer PR en menos de 10 minutos,
@@ -718,11 +718,11 @@ para probar CodeNetix sin fricción.
 **Y** existen `SECURITY.md` (política de divulgación), los créditos a la inspiración (Eric Risco) y la licencia elegida
 **Y** el repositorio incluye `LICENSE` (Apache-2.0) y la guía de contribución exige DCO (`git commit -s`) (OQ-2 resuelta)
 
-## Épica 7: Entrada automática: sondeo, webhooks y Sentry
+## Epic 7: Entrada automática: sondeo, webhooks y Sentry
 
 Las issues etiquetadas y los errores de Sentry llegan solos, sin lanzar nada a mano.
 
-### Historia 7.1: Sondeo de issues etiquetadas
+### Story 7.1: Sondeo de issues etiquetadas
 
 Como desarrollador sin servidor público,
 quiero que CodeNetix recoja solo las issues con la etiqueta `codenetix`,
@@ -736,7 +736,7 @@ para automatizar sin configurar webhooks.
 **Y** una issue con una Ejecución no terminal no genera otra; reetiquetarla sí genera un Evento nuevo
 **Y** en modo `Diagnostic` el sondeo no se ejecuta
 
-### Historia 7.2: Webhooks de GitHub
+### Story 7.2: Webhooks de GitHub
 
 Como tech lead con servidor,
 quiero que las issues etiquetadas se procesen al instante,
@@ -750,7 +750,7 @@ para no esperar al sondeo.
 **Y** si la firma no es válida, responde 401 y no se procesa
 **Y** en modo `Diagnostic` responde 503
 
-### Historia 7.3: Sentry: webhooks y correspondencia con el repositorio
+### Story 7.3: Sentry: webhooks y correspondencia con el repositorio
 
 Como tech lead,
 quiero que los errores nuevos o en regresión de Sentry generen Ejecuciones en el repositorio correcto,
@@ -764,7 +764,7 @@ para que los fallos de producción se arreglen solos.
 **Y** N eventos del mismo error generan como mucho una Ejecución no terminal
 **Y** un proyecto sin correspondencia queda como `ignored` con su motivo visible en el Panel
 
-### Historia 7.4: Contexto de Sentry para el Analista
+### Story 7.4: Contexto de Sentry para el Analista
 
 Como desarrollador,
 quiero que el Analista use la traza completa del error,
