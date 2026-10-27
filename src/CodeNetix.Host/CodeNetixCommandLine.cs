@@ -28,10 +28,29 @@ internal static class CodeNetixCommandLine
 
         return mode switch
         {
-            "serve" => await ServeMode.RunAsync(args[1..]),
+            "serve" => await ServeAsync(args[1..]),
             "healthcheck" => await HealthcheckMode.RunAsync(),
             _ => WriteUsage(mode),
         };
+    }
+
+    /// <summary>
+    /// Cualquier excepción de arranque (p. ej. un archivo de configuración de instancia inválido,
+    /// que se detecta antes de construir el host) termina con <see cref="ExitFailure"/>.
+    /// </summary>
+    private static async Task<int> ServeAsync(string[] args)
+    {
+        try
+        {
+            return await ServeMode.RunAsync(args);
+        }
+        catch (Exception ex)
+        {
+            // Aún no hay configuración ni sumidero de logs: solo se enmascaran los patrones de keys.
+            var message = new Secrets.SecretRedactor([]).Redact($"CodeNetix no ha podido arrancar: {ex.Message}");
+            await Console.Error.WriteLineAsync(message);
+            return ExitFailure;
+        }
     }
 
     private static bool IsTestHostInvocation(string[] args) =>

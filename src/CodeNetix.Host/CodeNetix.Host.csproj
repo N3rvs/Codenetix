@@ -11,6 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="YamlDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\CodeNetix.Contracts\CodeNetix.Contracts.csproj" />
     <ProjectReference Include="..\CodeNetix.Ingestion\CodeNetix.Ingestion.csproj" />
     <ProjectReference Include="..\CodeNetix.Pipeline\CodeNetix.Pipeline.csproj" />
