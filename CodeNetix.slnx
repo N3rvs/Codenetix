@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CodeNetix.Contracts/CodeNetix.Contracts.csproj" />
+    <Project Path="src/CodeNetix.Host/CodeNetix.Host.csproj" />
+    <Project Path="src/CodeNetix.Ingestion/CodeNetix.Ingestion.csproj" />
+    <Project Path="src/CodeNetix.Pipeline/CodeNetix.Pipeline.csproj" />
+    <Project Path="src/CodeNetix.Agents/CodeNetix.Agents.csproj" />
+    <Project Path="src/CodeNetix.Sandbox/CodeNetix.Sandbox.csproj" />
+    <Project Path="src/CodeNetix.GitHub/CodeNetix.GitHub.csproj" />
+    <Project Path="src/CodeNetix.Persistence/CodeNetix.Persistence.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CodeNetix.ArchitectureTests/CodeNetix.ArchitectureTests.csproj" />
+    <Project Path="tests/CodeNetix.Host.Tests/CodeNetix.Host.Tests.csproj" />
+  </Folder>
+</Solution>

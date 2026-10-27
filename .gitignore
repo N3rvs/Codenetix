@@ -9,6 +9,8 @@ TestResults/
 # Node / frontend
 node_modules/
 dist/
+# Panel compilado (lo genera `npm run build` en panel/)
+src/CodeNetix.Host/wwwroot/
 
 # CodeNetix runtime
 *.db
