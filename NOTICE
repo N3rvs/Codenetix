@@ -1,0 +1,8 @@
+CodeNetix
+Copyright 2026 N3rvs
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+CodeNetix orchestrates third-party coding agents (e.g. Claude Code) that are
+NOT distributed with this project and are subject to their own licenses and
+terms. Users install and use them with their own API keys.
