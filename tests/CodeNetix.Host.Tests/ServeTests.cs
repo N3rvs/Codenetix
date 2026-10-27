@@ -28,7 +28,7 @@ public sealed class ServeTests : IDisposable
     [Fact]
     public async Task Health_returns_200_Ready()
     {
-        await using var factory = new CodeNetixFactory(_dataDirectory, _webRoot);
+        await using var factory = new CodeNetixFactory(_dataDirectory, _webRoot, CodeNetixFactory.CompleteSettings);
         using var client = factory.CreateClient();
 
         using var response = await client.GetAsync("/api/health", TestContext.Current.CancellationToken);
