@@ -27,6 +27,9 @@ public sealed class SqliteDatabaseTests : IDisposable
     [Fact]
     public async Task InitializeAsync_fails_on_read_only_database_file()
     {
+        // root ignora los permisos de solo lectura (p. ej. la etapa de build de la imagen).
+        Assert.SkipWhen(!OperatingSystem.IsWindows() && Environment.UserName == "root", "root puede escribir en archivos de solo lectura.");
+
         await CreateDatabase().InitializeAsync(TestContext.Current.CancellationToken);
         SqliteConnection.ClearAllPools();
         var databasePath = Path.Combine(_dataDirectory, PersistenceOptions.DatabaseFileName);

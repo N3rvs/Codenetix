@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 
+// El contenedor debe llamarse "codenetix" para que funcione `docker exec codenetix …`.
+const runCommand =
+  'docker run --name codenetix -p 127.0.0.1:5000:5000 -v codenetix-data:/data … codenetix serve'
 const exampleCommand = 'docker exec codenetix codenetix fix <url-de-issue>'
 const retryDelayMs = 2000
 
@@ -95,9 +98,16 @@ export default function App() {
   return (
     <main>
       <h1>CodeNetix está en marcha</h1>
-      <p>Para lanzar trabajo sobre una issue de GitHub, ejecuta:</p>
+      <p>
+        Arranca el contenedor con el nombre <code>codenetix</code> y, para lanzar trabajo sobre una issue de GitHub,
+        ejecuta <code>codenetix fix</code> dentro de él:
+      </p>
       <pre>
-        <code>{exampleCommand}</code>
+        <code>
+          {runCommand}
+          {'\n'}
+          {exampleCommand}
+        </code>
       </pre>
     </main>
   )

@@ -12,7 +12,10 @@ internal static class CodeNetixCommandLine
         Uso: codenetix <modo>
 
         Modos:
-          serve         Arranca CodeNetix (Panel y API en http://localhost:5000).
+          serve         Arranca CodeNetix (Panel y API en http://localhost:5000; webhooks en :5001).
+          fix <url>     Lanza trabajo sobre una issue de GitHub (https://github.com/<owner>/<repo>/issues/<número>).
+                        Se ejecuta dentro del contenedor: docker exec codenetix codenetix fix <url>
+                        Con --follow muestra el Estado y los eventos de la Ejecución hasta que termina.
         """;
 
     public static async Task<int> RunAsync(string[] args)
@@ -29,6 +32,7 @@ internal static class CodeNetixCommandLine
         return mode switch
         {
             "serve" => await ServeAsync(args[1..]),
+            "fix" => await FixMode.RunAsync(args[1..]),
             "healthcheck" => await HealthcheckMode.RunAsync(),
             _ => WriteUsage(mode),
         };

@@ -1,3 +1,4 @@
+using CodeNetix.Contracts;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 
@@ -5,9 +6,9 @@ namespace CodeNetix.Persistence;
 
 /// <summary>
 /// Único punto de acceso al archivo SQLite de la instancia (AD-11): conexión y ajustes.
-/// Las tablas y migraciones son de cada módulo.
+/// Las tablas y migraciones son de cada módulo; los módulos solo ven <see cref="IDatabaseConnection"/>.
 /// </summary>
-public sealed class SqliteDatabase
+public sealed class SqliteDatabase : IDatabaseConnection
 {
     public const int BusyTimeoutMilliseconds = 5000;
 

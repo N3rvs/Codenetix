@@ -7,3 +7,44 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-2-configurar-la-instancia-y-modo-diagnostico.md`
   summary: La vista de diagnóstico del Panel (motivos en `Diagnostic`, bienvenida en `Ready`) no tiene verificación automática.
   evidence: `panel/` no tiene runner de tests y la historia 1.2 prohibía añadir dependencias de frontend; hoy solo lo cubre el humo manual con Docker. Severidad medium (sin verificar). Se resolvería al introducir Vitest/Testing Library en la Épica 4.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-3-acceso-seguro-al-panel-y-la-api.md`
+  summary: `AdminTokenMiddleware` solo acepta `Authorization: Bearer`; los clientes SignalR del navegador (WebSocket/SSE) envían el token como `access_token` en la query, así que `/hubs/**` será inaccesible desde el Panel.
+  evidence: Limitación del navegador con WebSocket/SSE. Aceptar `access_token` solo en `/hubs/**` y asegurar que la query no llega en claro a los logs, como muy tarde en la historia 4.1 (primer hub). Severidad medium.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-ejecucion-con-maquina-de-estados-visible.md`
+  summary: `RunEventLog` redacta el JSON serializado completo; un secreto configurado que coincida con una clave o valor de enum ("type", "Failed"…) rompe el discriminador.
+  evidence: Redactar solo los valores de texto libre antes de serializar. Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-6-ejecucion-con-maquina-de-estados-visible.md`
+  summary: El camino de éxito de `IRunEventSink.AppendAsync` externo (seq = max+1, redacción, reintento por conflicto) no tiene test.
+  evidence: Cubrirlo con el primer productor real (1.7: `RepositoryPrepared`/`RepoConfigResolved`). Severidad low.
+  resolved: Historia 1.7 — `RunExecutionTests.External_sink_appends_with_the_next_seq_and_redacts_the_payload` y `External_sink_retries_with_a_new_seq_when_another_writer_takes_it`.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-clonar-y-leer-la-configuracion-del-repositorio.md`
+  summary: La comprobación posterior de credenciales solo se ejercita con clones `file://` (que ignoran `http.extraHeader`); falta un clon HTTP con éxito.
+  evidence: Servir un repositorio smart-HTTP (`git http-backend`) en el fake. Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-clonar-y-leer-la-configuracion-del-repositorio.md`
+  summary: Con `CloneBaseUrl` `http://` el token viaja en claro en `Authorization: Basic`.
+  evidence: Rechazar el token con `http` salvo loopback. Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-7-clonar-y-leer-la-configuracion-del-repositorio.md`
+  summary: Si el proceso cae entre el guardado terminal y el `finally`, `workspaces/<shortId>` queda en disco.
+  evidence: Limpiar árboles huérfanos en la reconciliación al arrancar (5.3). Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-el-analista-genera-la-spec.md`
+  summary: `Providers__<Nombre>__BaseUrl` con `http://` a un host no local envía la key del Proveedor en claro sin pasar a `Diagnostic`.
+  evidence: Aceptar `http` solo para loopback/red privada. Severidad low. Agrupar con el mismo caso de `CloneBaseUrl` (1.7).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-8-el-analista-genera-la-spec.md`
+  summary: El listado de archivos para el Analista se trunca a las 2000 primeras rutas ordenadas, que pueden excluir `src/`.
+  evidence: Priorizar extensiones/directorios de código antes de truncar. Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-1-9-rechazo-temprano-con-aviso-en-la-issue.md`
+  summary: Notificaciones `Pending`/`Failed` (cancelación, 201 ilegible) no se reintentan ni dejan evento.
+  evidence: La reconciliación de 5.3 debe recorrer `gh_notifications` no `Posted` de Ejecuciones terminales. Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-1-sandbox-efimero-por-ejecucion.md`
+  summary: `DOCKER_HOST` `tcp://` con TLS (`DOCKER_TLS_VERIFY`/`DOCKER_CERT_PATH`) no está soportado y se reporta como "Docker no responde".
+  evidence: Detectar esas variables y dar un motivo explícito en `Diagnostic` (o soportar TLS de cliente). Severidad low.
