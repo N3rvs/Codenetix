@@ -1,0 +1,91 @@
+namespace CodeNetix.Contracts;
+
+/// <summary>Fuente de un Evento (AD-4).</summary>
+public enum EventSource
+{
+    Manual,
+    GitHub,
+    Sentry,
+    GitHubAction,
+}
+
+/// <summary>Estado de un Evento tras pasar por Ingestion.</summary>
+public enum EventStatus
+{
+    Accepted,
+    Ignored,
+}
+
+/// <summary>
+/// Evento normalizado que produce toda Fuente (AD-4). <see cref="Payload"/> es JSON tratado siempre
+/// como dato (nunca contiene el token ni otros secretos). Ids con <c>Guid.CreateVersion7()</c>; fechas UTC.
+/// </summary>
+/// <param name="ObjectKey">Objeto sobre el que se trabaja, p. ej. <c>github:owner/repo#12</c>.</param>
+/// <param name="DedupKey">Clave única de deduplicación, p. ej. <c>manual:&lt;url&gt;:&lt;requestId&gt;</c>.</param>
+/// <param name="Actor">Quién lo disparó (login de GitHub). Para el Evento manual, la identidad del token de la instancia.</param>
+/// <param name="Payload">JSON con los datos del Evento; su texto es siempre dato no confiable (<see cref="UntrustedText"/>).</param>
+public sealed record EventEnvelope(
+    Guid Id,
+    EventSource Source,
+    string ObjectKey,
+    string DedupKey,
+    string? Actor,
+    string Payload,
+    EventStatus Status,
+    string? IgnoredReason,
+    DateTimeOffset ReceivedAt);
+
+/// <summary>Resultado de <see cref="IManualEventIngestion.SubmitAsync"/>.</summary>
+public enum ManualEventOutcome
+{
+    /// <summary>Se ha creado un Evento nuevo (<c>Accepted</c> o <c>Ignored</c>).</summary>
+    Created,
+
+    /// <summary>Ya existía un Evento con la misma clave (mismo <c>requestId</c>): no se duplica.</summary>
+    Existing,
+
+    /// <summary>La URL no es una issue de GitHub admitida. No se persiste nada.</summary>
+    Rejected,
+
+    /// <summary>La URL es de Sentry, todavía sin soporte (Épica 7). No se persiste nada.</summary>
+    SentryNotSupported,
+
+    /// <summary>No se ha podido autorizar el disparador (GitHub no responde o token inválido). No se persiste nada.</summary>
+    Unavailable,
+}
+
+/// <summary>Evento persistido tal como lo ve quien lo envió.</summary>
+/// <param name="Repository"><c>owner/repo</c> del Repositorio objetivo.</param>
+/// <param name="IgnoredReason">Solo en <see cref="EventStatus.Ignored"/>, p. ej. <c>"no autorizado"</c>.</param>
+public sealed record ManualEventInfo(Guid Id, EventStatus Status, string? Actor, string Repository, string? IgnoredReason);
+
+/// <summary>
+/// Resultado de enviar un Evento manual: <see cref="Event"/> tiene valor en <c>Created</c> y
+/// <c>Existing</c>; <see cref="Reason"/>, en <c>Rejected</c>, <c>SentryNotSupported</c> y <c>Unavailable</c>.
+/// </summary>
+public sealed record ManualEventResult(ManualEventOutcome Outcome, ManualEventInfo? Event, string? Reason)
+{
+    public Guid? EventId => Event?.Id;
+
+    public static ManualEventResult Created(ManualEventInfo info) => new(ManualEventOutcome.Created, info, null);
+
+    public static ManualEventResult Existing(ManualEventInfo info) => new(ManualEventOutcome.Existing, info, null);
+
+    public static ManualEventResult Rejected(string reason) => new(ManualEventOutcome.Rejected, null, reason);
+
+    public static ManualEventResult SentryNotSupported(string reason) => new(ManualEventOutcome.SentryNotSupported, null, reason);
+
+    public static ManualEventResult Unavailable(string reason) => new(ManualEventOutcome.Unavailable, null, reason);
+}
+
+/// <summary>Entrada de trabajo manual (<c>codenetix fix</c>, <c>POST /api/events/manual</c>).</summary>
+public interface IManualEventIngestion
+{
+    /// <summary>
+    /// Normaliza <paramref name="url"/> a un <see cref="EventEnvelope"/> con <see cref="EventSource.Manual"/>
+    /// y lo persiste con la clave <c>manual:&lt;url-canónica&gt;:&lt;requestId&gt;</c>. Idempotente por
+    /// <paramref name="requestId"/>. Antes de persistir autoriza al actor (escritura en el Repositorio);
+    /// sin permiso, el Evento queda <see cref="EventStatus.Ignored"/>; si GitHub no responde, no se persiste nada.
+    /// </summary>
+    Task<ManualEventResult> SubmitAsync(string url, Guid requestId, CancellationToken cancellationToken);
+}

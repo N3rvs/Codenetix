@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenetix.dev/schemas/codenetix.v1.json",
+  "title": "codenetix.yml (versión 1)",
+  "description": "Configuración de CodeNetix por repositorio. Se lee una vez por Ejecución desde el commit base. El repositorio solo puede restringir los límites de la instancia, nunca ampliarlos.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "description": "Versión del formato. Siempre 1.",
+      "const": 1
+    },
+    "protected_paths": {
+      "description": "Globs de Rutas protegidas que se añaden a las de por defecto (**/Migrations/**, **/*.csproj, .github/**), que nunca se quitan.",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "reviewers": {
+      "description": "Revisores de la Ejecución. Si no se indica: security, quality y tests.",
+      "type": "array",
+      "uniqueItems": true,
+      "minItems": 1,
+      "items": {
+        "enum": ["security", "quality", "tests"]
+      }
+    },
+    "max_review_rounds": {
+      "description": "Máximo de rondas de revisión. Efectivo: el mínimo con el límite de la instancia.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "max_coding_attempts": {
+      "description": "Máximo de intentos de programación. Efectivo: el mínimo con el límite de la instancia.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "budget_usd": {
+      "description": "Presupuesto máximo por Ejecución en dólares. Efectivo: el mínimo con el de la instancia.",
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "models": {
+      "description": "Modelos por rol (opcional).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "analyst": { "type": "string", "minLength": 1 },
+        "coder": { "type": "string", "minLength": 1 },
+        "reviewers": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -105,6 +105,107 @@ public sealed class InstanceConfigurationTests : IDisposable
         await factory.Services.GetRequiredService<IInstanceHealth>().WhenReadyAsync(Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
     }
 
+    // --- Historia 2.1: Sandbox ---------------------------------------------------------------
+
+    [Fact]
+    public async Task Docker_down_or_missing_sandbox_image_is_Diagnostic_with_the_reason()
+    {
+        await using var factory = CreateFactory(new()
+        {
+            ["CODENETIX:GitHub:Token"] = GitHubToken,
+            ["CODENETIX:Providers:Anthropic:ApiKey"] = AnthropicKey,
+        });
+        var missing = CodeNetix.Sandbox.SandboxHealthCheck.MissingImage(CodeNetix.Sandbox.SandboxOptions.DefaultImage);
+        factory.SandboxHealth.Reasons = [missing];
+        using var client = factory.CreateClient();
+
+        var body = await GetHealthAsync(client, HttpStatusCode.OK);
+
+        Assert.Equal("Diagnostic", body.Status);
+        Assert.Equal([missing], body.Reasons);
+        Assert.Contains("docker build -f docker/sandbox.Dockerfile -t codenetix-sandbox .", missing, StringComparison.Ordinal);
+        Assert.False(factory.Services.GetRequiredService<IInstanceHealth>().WhenReadyAsync(Ct).IsCompleted);
+    }
+
+    [Fact]
+    public async Task Invalid_sandbox_limits_are_Diagnostic_naming_each_variable()
+    {
+        await using var factory = CreateFactory(new()
+        {
+            ["CODENETIX:GitHub:Token"] = GitHubToken,
+            ["CODENETIX:Providers:Anthropic:ApiKey"] = AnthropicKey,
+            ["CODENETIX:Sandbox:Image"] = " ",
+            ["CODENETIX:Sandbox:Cpus"] = "0",
+            ["CODENETIX:Sandbox:MemoryMb"] = "64",
+            ["CODENETIX:Sandbox:PidsLimit"] = "8",
+            ["CODENETIX:Sandbox:MaxLifetimeMinutes"] = "0",
+        });
+        using var client = factory.CreateClient();
+
+        var body = await GetHealthAsync(client, HttpStatusCode.OK);
+
+        Assert.Equal("Diagnostic", body.Status);
+        Assert.Equal(
+            [
+                InstanceOptionsValidator.InvalidSandboxImage,
+                InstanceOptionsValidator.InvalidSandboxCpus,
+                InstanceOptionsValidator.InvalidSandboxMemoryMb,
+                InstanceOptionsValidator.InvalidSandboxPidsLimit,
+                InstanceOptionsValidator.InvalidSandboxMaxLifetimeMinutes,
+            ],
+            body.Reasons);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("1441")]
+    public async Task Sandbox_max_lifetime_outside_1_to_1440_minutes_is_Diagnostic(string minutes)
+    {
+        await using var factory = CreateFactory(new()
+        {
+            ["CODENETIX:GitHub:Token"] = GitHubToken,
+            ["CODENETIX:Providers:Anthropic:ApiKey"] = AnthropicKey,
+            ["CODENETIX:Sandbox:MaxLifetimeMinutes"] = minutes,
+        });
+        using var client = factory.CreateClient();
+
+        var body = await GetHealthAsync(client, HttpStatusCode.OK);
+
+        Assert.Equal("Diagnostic", body.Status);
+        Assert.Equal([InstanceOptionsValidator.InvalidSandboxMaxLifetimeMinutes], body.Reasons);
+    }
+
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData(null, "tcp://docker-host:2375", "tcp://docker-host:2375")]
+    [InlineData("unix:///run/user/1000/docker.sock", "tcp://docker-host:2375", "unix:///run/user/1000/docker.sock")]
+    public async Task Sandbox_options_come_from_CODENETIX_Sandbox_then_DOCKER_HOST_then_the_default(string? configured, string? dockerHost, string? expected)
+    {
+        if (dockerHost is null && !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("DOCKER_HOST")))
+        {
+            Assert.Skip("DOCKER_HOST está definido en el entorno del proceso de pruebas.");
+        }
+
+        await using var factory = CreateFactory(new()
+        {
+            ["CODENETIX:Sandbox:DockerEndpoint"] = configured,
+            ["DOCKER_HOST"] = dockerHost,
+            ["CODENETIX:Sandbox:Cpus"] = "1.5",
+            ["CODENETIX:Sandbox:MemoryMb"] = "2048",
+        });
+        _ = factory.Server;
+
+        var options = factory.Services.GetRequiredService<IOptions<CodeNetix.Sandbox.SandboxOptions>>().Value;
+
+        Assert.Equal(expected ?? string.Empty, options.DockerEndpoint ?? string.Empty);
+        Assert.Equal(expected ?? CodeNetix.Sandbox.SandboxOptions.DefaultDockerEndpoint, options.EffectiveDockerEndpoint);
+        Assert.Equal(CodeNetix.Sandbox.SandboxOptions.DefaultImage, options.Image);
+        Assert.Equal(1.5, options.Cpus);
+        Assert.Equal(2048, options.MemoryMb);
+        Assert.Equal(512, options.PidsLimit);
+        Assert.Equal(60, options.MaxLifetimeMinutes);
+    }
+
     [Fact]
     public async Task Yaml_only_configuration_is_Ready()
     {
@@ -159,7 +260,7 @@ public sealed class InstanceConfigurationTests : IDisposable
             ["CODENETIX:GitHub:Token"] = GitHubToken,
             ["CODENETIX:Providers:Local:ApiKey"] = NonPatternKey,
         });
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthorizedClient();
 
         await AssertNonPatternKeyMaskedAsync(client);
     }
@@ -175,7 +276,7 @@ public sealed class InstanceConfigurationTests : IDisposable
                 ApiKey: {NonPatternKey}
             """);
         await using var factory = CreateFactory(new() { ["CODENETIX:InstanceConfigPath"] = yamlPath });
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthorizedClient();
 
         await AssertNonPatternKeyMaskedAsync(client);
     }
@@ -198,7 +299,7 @@ public sealed class InstanceConfigurationTests : IDisposable
             ["CODENETIX:GitHub:Token"] = GitHubToken,
             ["CODENETIX:Providers:Anthropic:ApiKey"] = AnthropicKey,
         });
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthorizedClient();
 
         // El 404 de /api devuelve la ruta en "instance" (RFC 9457): la key acaba en el cuerpo.
         using var response = await client.GetAsync($"/api/{AnthropicKey}", Ct);
@@ -214,7 +315,7 @@ public sealed class InstanceConfigurationTests : IDisposable
     {
         var unknownKey = "sk-ant-" + new string('Q', 36) + "zz99";
         await using var factory = CreateFactory();
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthorizedClient();
 
         using var response = await client.GetAsync($"/api/{unknownKey}", Ct);
         var body = await response.Content.ReadAsStringAsync(Ct);
@@ -268,11 +369,18 @@ public sealed class InstanceConfigurationTests : IDisposable
         foreach (var file in files)
         {
             byte[] bytes;
-            using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            using (var memory = new MemoryStream())
+            try
             {
+                using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var memory = new MemoryStream();
                 stream.CopyTo(memory);
                 bytes = memory.ToArray();
+            }
+            catch (FileNotFoundException) when (!file.EndsWith("codenetix.db", StringComparison.Ordinal))
+            {
+                // -wal/-shm desaparecen si se cierra la última conexión (SqliteConnection.ClearAllPools es
+                // global y otros tests lo llaman en paralelo): un archivo que ya no existe no contiene secretos.
+                continue;
             }
 
             foreach (var secret in new[] { GitHubToken, AnthropicKey })

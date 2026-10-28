@@ -105,8 +105,8 @@ internal sealed partial class SecretRedactor : ISecretRedactor
         }
     }
 
-    // sk-ant-…, sk-… (Anthropic, OpenAI y compatibles), ghp_/gho_/ghu_/ghs_/ghr_… y github_pat_… (GitHub).
-    // Longitud mínima para no tocar palabras corrientes como "sk-learn".
-    [GeneratedRegex(@"(?<![A-Za-z0-9_\-])(?:sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})", RegexOptions.CultureInvariant)]
+    // sk-ant-…, sk-… (Anthropic, OpenAI y compatibles), ghp_/gho_/ghu_/ghs_/ghr_… y github_pat_… (GitHub),
+    // cnx_… (admin-token de CodeNetix). Longitud mínima para no tocar palabras corrientes como "sk-learn".
+    [GeneratedRegex(@"(?<![A-Za-z0-9_\-])(?:sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|cnx_[A-Za-z0-9_\-]{20,})", RegexOptions.CultureInvariant)]
     private static partial Regex KnownKeyPattern();
 }
