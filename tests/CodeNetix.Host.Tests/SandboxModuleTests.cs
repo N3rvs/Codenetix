@@ -640,6 +640,61 @@ public sealed class SandboxModuleTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HasChangesAsync_detects_changes_and_throws_on_failure()
+    {
+        var (manager, runId) = await PrepareRunAsync();
+        await using var session = await manager.CreateForRunAsync(runId, Ct);
+
+        // 1) Si la salida del script coincide con el BaseDigest -> false (sin cambios)
+        var baseDigest = ((SandboxSession)session).BaseDigest;
+        _engine.ExecFrames.Clear();
+        _engine.ExecFrames.Add((1, Encoding.UTF8.GetBytes(baseDigest + "  -\n")));
+        _engine.ExecExitCode = 0;
+
+        var unchanged = await session.HasChangesAsync(Ct);
+        Assert.False(unchanged);
+
+        // 2) Si la salida tiene un digest diferente -> true (con cambios)
+        var changedDigest = new string('f', 64);
+        _engine.ExecFrames.Clear();
+        _engine.ExecFrames.Add((1, Encoding.UTF8.GetBytes(changedDigest + "  -\n")));
+        _engine.ExecExitCode = 0;
+
+        var changed = await session.HasChangesAsync(Ct);
+        Assert.True(changed);
+
+        // 3) Si el script falla (ExitCode != 0) -> SandboxUnavailableException
+        _engine.ExecFrames.Clear();
+        _engine.ExecExitCode = 1;
+
+        await Assert.ThrowsAsync<SandboxUnavailableException>(() => session.HasChangesAsync(Ct));
+    }
+
+    [Fact]
+    public async Task SandboxToolsProvisioner_skips_when_claude_already_installed()
+    {
+        var (manager, runId) = await PrepareRunAsync();
+        await using var session = await manager.CreateForRunAsync(runId, Ct);
+
+        // El probe busca "command -v claude" y sale con 0
+        _engine.ExecFrames.Clear();
+        _engine.ExecFrames.Add((1, "/tools/bin/claude\n"u8.ToArray()));
+        _engine.ExecExitCode = 0;
+
+        var provisioner = new SandboxToolsProvisioner(
+            _docker,
+            null!,
+            Options.Create(new SandboxOptions()),
+            NullLogger<SandboxToolsProvisioner>.Instance);
+
+        await provisioner.EnsureClaudeCliAsync(session, Ct);
+
+        // Se verifica que ejecutó command -v claude y no creó el contenedor temporal de instalación npm
+        Assert.Contains(_engine.Requests, r => r.Route.EndsWith("/exec", StringComparison.Ordinal));
+        Assert.DoesNotContain(_engine.Requests, r => r.Method == "POST" && r.Route == "/containers/create" && r.Text.Contains("npm"));
+    }
+
+    [Fact]
     public async Task ExportTree_ignores_the_repository_export_ignore_and_export_subst_attributes()
     {
         var repo = "attrs" + Guid.NewGuid().ToString("N")[..6];

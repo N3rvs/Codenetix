@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
@@ -15,6 +17,8 @@ namespace CodeNetix.Pipeline.Events;
 internal sealed class RunEventLog(ISecretRedactor redactor, TimeProvider timeProvider)
 {
     public DateTimeOffset UtcNow => timeProvider.GetUtcNow();
+
+    internal ISecretRedactor Redactor => redactor;
 
     /// <summary>
     /// Registra la transición de <paramref name="run"/>: actualiza <c>updated_at</c>, redacta el detalle del
@@ -96,9 +100,20 @@ internal static class RunEventJson
 /// confirma el evento. Las transiciones (<see cref="RunCreated"/>, <see cref="StateChanged"/>) solo las emite
 /// el agregado, así que aquí se rechazan.
 /// </summary>
-internal sealed class RunEventSink(IDbContextFactory<PipelineDbContext> contextFactory, RunEventLog log) : IRunEventSink
+internal sealed class RunEventSink(
+    IDbContextFactory<PipelineDbContext> contextFactory,
+    RunEventLog log,
+    ISecretRedactor? redactor = null) : IRunEventSink
 {
     private const int MaxAttempts = 5;
+    private readonly ISecretRedactor _redactor = redactor ?? log.Redactor;
+    private readonly ConcurrentDictionary<(Guid RunId, Guid StageId), StageOutputTracker> _stageTrackers = new();
+
+    private sealed class StageOutputTracker
+    {
+        public long TotalBytes;
+        public bool Truncated;
+    }
 
     public async Task<RunEvent> AppendAsync(Guid runId, Guid? stageId, RunEvent payload, CancellationToken cancellationToken)
     {
@@ -108,8 +123,120 @@ internal sealed class RunEventSink(IDbContextFactory<PipelineDbContext> contextF
             throw new ArgumentException($"{RunEventJson.TypeOf(payload)} solo lo emite el agregado PipelineRun.", nameof(payload));
         }
 
-        // stageId: las Etapas (run_stages) llegan en historias posteriores; hoy no se persiste.
-        _ = stageId;
+        if (payload is OutputAppended appended)
+        {
+            var stageKey = (runId, stageId ?? Guid.Empty);
+            var tracker = _stageTrackers.GetOrAdd(stageKey, _ => new StageOutputTracker());
+
+            string? textToPersist = null;
+            var shouldTruncate = false;
+            lock (tracker)
+            {
+                if (tracker.Truncated)
+                {
+                    return appended with { RunId = runId };
+                }
+
+                var redacted = _redactor.Redact(appended.Text);
+                var utf8Bytes = Encoding.UTF8.GetByteCount(redacted);
+                var maxBytes = OutputTruncated.DefaultMaxBytes;
+
+                if (tracker.TotalBytes + utf8Bytes <= maxBytes)
+                {
+                    tracker.TotalBytes += utf8Bytes;
+                    textToPersist = redacted;
+                }
+                else
+                {
+                    var allowedBytes = (int)Math.Max(0, maxBytes - tracker.TotalBytes);
+                    var (cutText, cutBytes) = TruncateToUtf8Bytes(redacted, allowedBytes);
+                    tracker.TotalBytes += cutBytes;
+                    tracker.Truncated = true;
+                    shouldTruncate = true;
+                    if (cutText.Length > 0)
+                    {
+                        textToPersist = cutText;
+                    }
+                }
+            }
+
+            RunEvent? result = null;
+            if (textToPersist is not null)
+            {
+                result = await AppendCoreAsync(runId, appended with { Text = textToPersist }, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (shouldTruncate)
+            {
+                var truncResult = await AppendCoreAsync(runId, new OutputTruncated(), cancellationToken).ConfigureAwait(false);
+                result ??= truncResult;
+            }
+
+            return result ?? appended with { RunId = runId };
+        }
+
+        if (payload is OutputTruncated)
+        {
+            var stageKey = (runId, stageId ?? Guid.Empty);
+            var tracker = _stageTrackers.GetOrAdd(stageKey, _ => new StageOutputTracker());
+            lock (tracker)
+            {
+                tracker.Truncated = true;
+            }
+        }
+
+        if (payload is StateChanged sc && sc.To.IsTerminal())
+        {
+            foreach (var key in _stageTrackers.Keys.Where(k => k.RunId == runId).ToList())
+            {
+                _stageTrackers.TryRemove(key, out _);
+            }
+        }
+
+        return await AppendCoreAsync(runId, payload, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static (string Text, int ByteCount) TruncateToUtf8Bytes(string text, int maxBytes)
+    {
+        if (maxBytes <= 0 || string.IsNullOrEmpty(text))
+        {
+            return (string.Empty, 0);
+        }
+
+        if (Encoding.UTF8.GetByteCount(text) <= maxBytes)
+        {
+            return (text, Encoding.UTF8.GetByteCount(text));
+        }
+
+        var low = 0;
+        var high = Math.Min(text.Length, maxBytes);
+        var bestChars = 0;
+        while (low <= high)
+        {
+            var mid = (low + high) / 2;
+            var bytes = Encoding.UTF8.GetByteCount(text.AsSpan(0, mid));
+            if (bytes <= maxBytes)
+            {
+                bestChars = mid;
+                low = mid + 1;
+            }
+            else
+            {
+                high = mid - 1;
+            }
+        }
+
+        if (bestChars > 0 && char.IsHighSurrogate(text[bestChars - 1]))
+        {
+            bestChars--;
+        }
+
+        return (text[..bestChars], Encoding.UTF8.GetByteCount(text.AsSpan(0, bestChars)));
+    }
+
+    private async Task<RunEvent> AppendCoreAsync(Guid runId, RunEvent payload, CancellationToken cancellationToken)
+    {
+
 
         for (var attempt = 1; ; attempt++)
         {

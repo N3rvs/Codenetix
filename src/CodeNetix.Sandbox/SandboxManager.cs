@@ -43,6 +43,9 @@ internal sealed partial class SandboxManager(
 
     public const string SandboxUser = "1000:1000";
 
+    /// <summary><c>PATH</c> de los contenedores: primero las herramientas de <c>codenetix-tools</c> (p. ej. <c>claude</c>).</summary>
+    public const string SandboxPath = "/tools/node_modules/.bin:/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
     public const string BuildHint = "docker build -f docker/sandbox.Dockerfile -t codenetix-sandbox .";
 
     /// <summary>Tamaño del <c>tmpfs</c> de <c>/tmp</c> (HOME y caché de NuGet).</summary>
@@ -73,6 +76,7 @@ internal sealed partial class SandboxManager(
         string? containerId = null;
         var volumeCreated = false;
         var gatewayRegistered = false;
+        var baseDigest = string.Empty;
         try
         {
             // 1) Árbol del BaseSha (sin .git) a un temporal: si no hay árbol, falla antes de tocar Docker.
@@ -99,8 +103,10 @@ internal sealed partial class SandboxManager(
                     BuildContainerBody(image, volume, labels, settings, apiKey, extraHost),
                     cancellationToken).ConfigureAwait(false);
 
-                // 5) Árbol a /workspace antes del start.
-                await docker.PutArchiveAsync(containerId, WorkspacePath, new WorkspaceArchiveContent(tree), UploadTimeout, cancellationToken).ConfigureAwait(false);
+                // 5) Árbol a /workspace antes del start (su huella se calcula al vuelo para HasChangesAsync).
+                var archive = new WorkspaceArchiveContent(tree);
+                await docker.PutArchiveAsync(containerId, WorkspacePath, archive, UploadTimeout, cancellationToken).ConfigureAwait(false);
+                baseDigest = archive.BaseDigest;
             }
 
             await docker.StartContainerAsync(containerId, cancellationToken).ConfigureAwait(false);
@@ -123,7 +129,8 @@ internal sealed partial class SandboxManager(
                 loggerFactory.CreateLogger<SandboxSession>(),
                 cancellationToken,
                 _gateway,
-                apiKey);
+                apiKey,
+                baseDigest);
             LogCreated(RunShortId.Of(runId), name, image);
             return session;
         }
@@ -205,6 +212,7 @@ internal sealed partial class SandboxManager(
             ["WorkingDir"] = WorkspacePath,
             ["Env"] = new JsonArray(
                 "HOME=/tmp/home",
+                $"PATH={SandboxPath}",
                 "DOTNET_CLI_HOME=/tmp/home",
                 "NUGET_PACKAGES=/tmp/nuget",
                 "DOTNET_CLI_TELEMETRY_OPTOUT=1",

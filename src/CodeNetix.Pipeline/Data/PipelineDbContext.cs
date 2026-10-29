@@ -53,6 +53,8 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
         runs.Property(r => r.FailureDetail).HasColumnName("failure_detail");
         runs.Property(r => r.BaseSha).HasColumnName("base_sha");
         runs.Property(r => r.EffectiveConfigJson).HasColumnName("effective_config_json");
+        runs.Property(r => r.CodingAttempts).HasColumnName("coding_attempts");
+        runs.Property(r => r.FailedCodingAttempts).HasColumnName("failed_coding_attempts");
 
         // EF Sqlite no ordena ni compara DateTimeOffset guardado como TEXT: ticks UTC (INTEGER), igual que ing_events.
         runs.Property(r => r.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));

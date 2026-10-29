@@ -1,5 +1,6 @@
 using CodeNetix.Agents.ChatClients;
 using CodeNetix.Agents.Features.AnalyzeIssue;
+using CodeNetix.Agents.Features.ImplementSpec;
 using CodeNetix.Agents.StructuredOutput;
 using CodeNetix.Contracts;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,6 +23,7 @@ public static class AgentsServiceCollectionExtensions
         services.TryAddSingleton<IAgentChatClientFactory, OpenAICompatibleChatClientFactory>();
         services.TryAddSingleton<SchemaRetryDecorator>();
         services.TryAddSingleton<IAnalyst, Analyst>();
+        services.TryAddSingleton<ICodingAgent, ClaudeCodeAgent>();
         return services;
     }
 }

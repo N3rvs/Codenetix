@@ -57,6 +57,9 @@ internal sealed class CodeNetixFactory(
     /// <summary>Comprobación de Docker falsa del arranque (sin motivos por defecto).</summary>
     public FakeSandboxHealthCheck SandboxHealth { get; } = new();
 
+    /// <summary>Provisionador de herramientas falso que no toca npm ni Docker.</summary>
+    public FakeSandboxToolsProvisioner ToolsProvisioner { get; } = new();
+
     /// <summary>La API de GitHub falsa en uso (la pasada o la propia); <c>null</c> si los ajustes fijan otra URL.</summary>
     public FakeGitHub? GitHub => gitHub ?? _ownedGitHub;
 
@@ -138,6 +141,7 @@ internal sealed class CodeNetixFactory(
         {
             services.AddSingleton<ISandboxManager>(Sandbox);
             services.AddSingleton<ISandboxHealthCheck>(SandboxHealth);
+            services.AddSingleton<ISandboxToolsProvisioner>(ToolsProvisioner);
         });
 
         if (!UseRealChatClient)

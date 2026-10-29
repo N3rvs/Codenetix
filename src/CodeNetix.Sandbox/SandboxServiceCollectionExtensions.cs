@@ -36,6 +36,7 @@ public static class SandboxServiceCollectionExtensions
         services.TryAddSingleton<NuGetConnectProxy>();
         services.AddHostedService(sp => sp.GetRequiredService<NuGetConnectProxy>());
         services.TryAddSingleton<ISandboxManager, SandboxManager>();
+        services.TryAddSingleton<ISandboxToolsProvisioner, SandboxToolsProvisioner>();
         services.TryAddSingleton<ISandboxHealthCheck, SandboxHealthCheck>();
         return services;
     }

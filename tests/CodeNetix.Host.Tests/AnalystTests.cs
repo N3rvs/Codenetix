@@ -62,7 +62,7 @@ public sealed partial class AnalystTests : IDisposable
         Assert.Equal("Failed", run.State);
         Assert.Equal("StageError", run.FailureReason);
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        Assert.Equal("Programación no disponible", run.FailureDetail);
+        Assert.Equal("Pruebas no disponibles", run.FailureDetail);
 
         // GET /api/runs/<id> incluye la Spec.
         var spec = run.Json.GetProperty("spec");
@@ -75,7 +75,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var events = Events(run);
         Assert.Equal(
-            ["RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged", "SandboxCreated", "SpecGenerated", "StateChanged", "SandboxReleased"],
+            ["RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged", "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged", "SandboxReleased"],
             events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal(1, events[6].GetProperty("attempts").GetInt32());
         Assert.Equal(AgentEndpointResolver.AnthropicDefaultModel, events[6].GetProperty("model").GetString());
