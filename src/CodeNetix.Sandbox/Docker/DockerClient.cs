@@ -9,9 +9,10 @@ namespace CodeNetix.Sandbox.Docker;
 
 /// <summary>
 /// Cliente mínimo de la API HTTP del motor Docker (v1.43 o superior) sobre <see cref="HttpClient"/>: sin CLI y sin
-/// Docker.DotNet. Solo lo que necesita el Sandbox: <c>/_ping</c>, versión, imágenes (inspeccionar), volúmenes (crear y
-/// borrar), contenedores (crear, iniciar, parar, matar, borrar, inspeccionar, <c>PUT archive</c>) y exec (crear,
-/// iniciar con el flujo multiplexado e inspeccionar).
+/// Docker.DotNet. Solo lo que necesita el Sandbox: <c>/_ping</c>, versión, imágenes (inspeccionar), redes (inspeccionar,
+/// crear <c>internal</c> y conectar el host como <c>gateway</c>), volúmenes (crear y borrar), contenedores (crear,
+/// iniciar, parar, matar, borrar, inspeccionar, <c>PUT archive</c>) y exec (crear, iniciar con el flujo multiplexado e
+/// inspeccionar).
 /// </summary>
 internal sealed class DockerClient : IDisposable
 {
@@ -109,6 +110,86 @@ internal sealed class DockerClient : IDisposable
     public async Task<bool> ImageExistsAsync(string image, CancellationToken cancellationToken)
     {
         using var response = await SendVersionedAsync(HttpMethod.Get, $"/images/{EscapeName(image)}/json", null, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    // --- Redes ------------------------------------------------------------------------------
+
+    /// <summary><c>GET /networks/{name}</c>; <c>null</c> si no existe.</summary>
+    public async Task<JsonDocument?> InspectNetworkAsync(string name, CancellationToken cancellationToken)
+    {
+        using var response = await SendVersionedAsync(HttpMethod.Get, $"/networks/{EscapeName(name)}", null, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        return await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary><c>POST /networks/create</c> con <c>Driver: bridge</c> e <c>Internal: true</c>.</summary>
+    public async Task CreateNetworkAsync(string name, IReadOnlyDictionary<string, string> labels, CancellationToken cancellationToken)
+    {
+        var body = new JsonObject
+        {
+            ["Name"] = name,
+            ["Driver"] = "bridge",
+            ["Internal"] = true,
+            ["Labels"] = ToJsonObject(labels),
+        };
+        using var response = await SendVersionedAsync(HttpMethod.Post, "/networks/create", body, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode == HttpStatusCode.Conflict)
+        {
+            return;
+        }
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (text.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary><c>POST /networks/{name}/connect</c>: une <paramref name="containerIdOrName"/> con el alias <paramref name="alias"/>.</summary>
+    public async Task ConnectNetworkAsync(string networkName, string containerIdOrName, string alias, CancellationToken cancellationToken)
+    {
+        var body = new JsonObject
+        {
+            ["Container"] = containerIdOrName,
+            ["EndpointConfig"] = new JsonObject
+            {
+                ["Aliases"] = new JsonArray(alias),
+            },
+        };
+        using var response = await SendVersionedAsync(HttpMethod.Post, $"/networks/{EscapeName(networkName)}/connect", body, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.Conflict)
+        {
+            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            if (text.Contains("already exists", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary><c>DELETE /networks/{name}</c>; <c>false</c> si no existía.</summary>
+    public async Task<bool> RemoveNetworkAsync(string name, CancellationToken cancellationToken)
+    {
+        using var response = await SendVersionedAsync(HttpMethod.Delete, $"/networks/{EscapeName(name)}", null, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return false;

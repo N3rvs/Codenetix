@@ -19,6 +19,9 @@ public sealed class AgentsOptions
 
     /// <summary>Proveedor y modelo del Analista; <c>null</c> si la configuración no es coherente (modo diagnóstico).</summary>
     public AgentEndpoint? Analyst { get; set; }
+
+    /// <summary>Proveedor y modelo del Programador; <c>null</c> si la configuración no es coherente (modo diagnóstico).</summary>
+    public AgentEndpoint? Coder { get; set; }
 }
 
 /// <summary>Un Proveedor compatible con OpenAI ya resuelto para un rol.</summary>

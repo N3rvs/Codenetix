@@ -10,7 +10,7 @@ using Microsoft.Extensions.Options;
 namespace CodeNetix.Host.Tests;
 
 /// <summary>
-/// Matriz de la historia 2.1 contra el Docker real (Docker Desktop en Windows, el socket en Linux). Se saltan si
+/// Matriz de las historias 2.1 y 2.2 contra el Docker real (Docker Desktop en Windows, el socket en Linux). Se saltan si
 /// Docker no responde o falta la imagen (<c>docker build -f docker/sandbox.Dockerfile -t codenetix-sandbox .</c>), por
 /// ejemplo dentro de la etapa <c>sdk</c> de la imagen. La imagen se puede cambiar con
 /// <c>CODENETIX_TEST_SANDBOX_IMAGE</c>. Todo lo que crean lleva <c>codenetix.managed=true</c> y una etiqueta
@@ -62,6 +62,12 @@ public sealed class SandboxIntegrationTests(SandboxDockerFixture fixture) : IAsy
         Assert.True(await Docker.VolumeExistsAsync(SandboxManager.VolumeNameOf(runId), Ct));
         Assert.True(await Docker.VolumeExistsAsync(SandboxManager.ToolsVolume, Ct));
 
+        using (var netInspect = await Docker.InspectNetworkAsync(SandboxOptions.DefaultNetworkName, Ct))
+        {
+            Assert.NotNull(netInspect);
+            Assert.True(netInspect.RootElement.GetProperty("Internal").GetBoolean());
+        }
+
         using (var inspect = await Docker.InspectContainerAsync(session.ContainerId, Ct))
         {
             var root = inspect!.RootElement;
@@ -75,7 +81,7 @@ public sealed class SandboxIntegrationTests(SandboxDockerFixture fixture) : IAsy
             Assert.Equal(2_000_000_000L, host.GetProperty("NanoCpus").GetInt64());
             Assert.Equal(4096L * 1024 * 1024, host.GetProperty("Memory").GetInt64());
             Assert.Equal(512L, host.GetProperty("PidsLimit").GetInt64());
-            Assert.Equal("none", host.GetProperty("NetworkMode").GetString());
+            Assert.Equal(SandboxOptions.DefaultNetworkName, host.GetProperty("NetworkMode").GetString());
             Assert.False(host.GetProperty("Privileged").GetBoolean());
             Assert.True(host.GetProperty("ReadonlyRootfs").GetBoolean());
             Assert.Contains("ALL", host.GetProperty("CapDrop").EnumerateArray().Select(c => c.GetString()));
@@ -107,12 +113,24 @@ public sealed class SandboxIntegrationTests(SandboxDockerFixture fixture) : IAsy
         Assert.Equal(0, write.ExitCode);
         Assert.Equal("1000:1000\n", write.StdOut);
 
-        // Ni el token de GitHub ni nada de .git en el entorno del Sandbox; sin red.
+        // Ni el token de GitHub ni nada de .git en el entorno del Sandbox; variables del Egress Gateway configuradas.
         var env = await session.ExecAsync(new SandboxCommand("env"), Ct);
         Assert.DoesNotContain(Token, env.StdOut, StringComparison.Ordinal);
         Assert.Contains("HOME=/tmp/home", env.StdOut, StringComparison.Ordinal);
-        var network = await session.ExecAsync(Sh("cat /proc/net/route | wc -l; ls /sys/class/net"), Ct);
-        Assert.DoesNotContain("eth0", network.StdOut, StringComparison.Ordinal);
+        Assert.Contains("ANTHROPIC_BASE_URL=http://gateway:8080/llm", env.StdOut, StringComparison.Ordinal);
+        Assert.Contains($"ANTHROPIC_API_KEY=cnx-run-{runId:D}-", env.StdOut, StringComparison.Ordinal);
+        Assert.Contains("HTTPS_PROXY=http://gateway:8081", env.StdOut, StringComparison.Ordinal);
+        Assert.Contains("NO_PROXY=gateway,localhost,127.0.0.1", env.StdOut, StringComparison.Ordinal);
+
+        // El nombre gateway resuelve y cualquier conexión directa a una IP externa falla por la red internal.
+        var gatewayHost = await session.ExecAsync(Sh("getent hosts gateway"), Ct);
+        Assert.Equal(0, gatewayHost.ExitCode);
+        Assert.Contains("gateway", gatewayHost.StdOut, StringComparison.Ordinal);
+
+        var directEgress = await session.ExecAsync(
+            new SandboxCommand("bash", ["-c", "cat < /dev/null > /dev/tcp/1.1.1.1/443"]) { Timeout = TimeSpan.FromSeconds(5) },
+            Ct);
+        Assert.NotEqual(0, directEgress.ExitCode);
     }
 
     [Fact]
@@ -338,12 +356,13 @@ public sealed class SandboxIntegrationTests(SandboxDockerFixture fixture) : IAsy
 
 /// <summary>
 /// Docker compartido por <see cref="SandboxIntegrationTests"/>: comprueba una vez si se puede usar y, al terminar, borra
-/// el volumen <c>codenetix-tools</c> solo si no existía antes de las pruebas (nunca el de un usuario).
+/// el volumen <c>codenetix-tools</c> y la red <c>codenetix-sandbox</c> solo si no existían antes de las pruebas.
 /// </summary>
 public sealed class SandboxDockerFixture : IAsyncLifetime
 {
     private DockerClient? _docker;
     private bool _toolsPreexisted = true;
+    private bool _networkPreexisted = true;
 
     public static string Image => Environment.GetEnvironmentVariable("CODENETIX_TEST_SANDBOX_IMAGE") is { Length: > 0 } image
         ? image
@@ -371,6 +390,8 @@ public sealed class SandboxDockerFixture : IAsyncLifetime
             }
 
             _toolsPreexisted = await _docker.VolumeExistsAsync(SandboxManager.ToolsVolume, CancellationToken.None);
+            using var net = await _docker.InspectNetworkAsync(SandboxOptions.DefaultNetworkName, CancellationToken.None);
+            _networkPreexisted = net is not null;
         }
         catch (FormatException ex)
         {
@@ -391,6 +412,19 @@ public sealed class SandboxDockerFixture : IAsyncLifetime
             {
                 using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
                 await _docker.RemoveVolumeAsync(SandboxManager.ToolsVolume, timeout.Token);
+            }
+            catch (DockerApiException)
+            {
+                // En uso por otro contenedor: se conserva.
+            }
+        }
+
+        if (Unavailable is null && !_networkPreexisted)
+        {
+            try
+            {
+                using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await _docker.RemoveNetworkAsync(SandboxOptions.DefaultNetworkName, timeout.Token);
             }
             catch (DockerApiException)
             {

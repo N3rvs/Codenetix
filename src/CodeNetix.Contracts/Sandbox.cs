@@ -45,6 +45,44 @@ public interface ISandboxSession : IAsyncDisposable
     Task StopAsync();
 }
 
+/// <summary>Sesión activa registrada en el Egress Gateway para una Ejecución (AD-7).</summary>
+/// <param name="RunId">Identificador de la Ejecución.</param>
+/// <param name="Token">Credencial efímera <c>cnx-run-&lt;runId&gt;-&lt;nonce&gt;</c>.</param>
+/// <param name="ContainerIp">IP del contenedor en la red <c>codenetix-sandbox</c>, si se conoce.</param>
+public sealed record SandboxGatewaySession(Guid RunId, string Token, string? ContainerIp = null);
+
+/// <summary>
+/// Registro de sesiones activas del Sandbox en el Egress Gateway (AD-7). Mantiene por <c>runId</c> su credencial
+/// efímera <c>cnx-run-&lt;runId&gt;-&lt;nonce&gt;</c> y la IP del contenedor en <c>codenetix-sandbox</c>, y las da de
+/// baja en <c>StopAsync</c>/<c>DisposeAsync</c>.
+/// </summary>
+public interface ISandboxGateway
+{
+    /// <summary>Genera un token efímero <c>cnx-run-&lt;runId&gt;-&lt;nonce&gt;</c> y registra la sesión activa.</summary>
+    SandboxGatewaySession Register(Guid runId);
+
+    /// <summary>Registra o actualiza una sesión activa con el token efímero indicado.</summary>
+    SandboxGatewaySession Register(Guid runId, string token, string? containerIp = null);
+
+    /// <summary>Actualiza la IP del contenedor en <c>codenetix-sandbox</c> para una sesión activa.</summary>
+    void UpdateContainerIp(Guid runId, string? containerIp);
+
+    /// <summary>Da de baja la sesión de <paramref name="runId"/> y revoca su credencial efímera.</summary>
+    bool Revoke(Guid runId);
+
+    /// <summary>Busca la sesión activa de <paramref name="runId"/>.</summary>
+    bool TryGet(Guid runId, out SandboxGatewaySession? session);
+
+    /// <summary>Valida en tiempo constante una credencial efímera y devuelve su sesión si sigue activa.</summary>
+    bool TryAuthenticate(string? token, out SandboxGatewaySession? session);
+
+    /// <summary>
+    /// Identifica el <c>runId</c> de una petición al proxy <c>CONNECT</c> por <c>Proxy-Authorization</c>, IP de origen
+    /// del contenedor en <c>codenetix-sandbox</c> o única sesión activa.
+    /// </summary>
+    Guid? ResolveRunId(string? proxyAuthorization, string? remoteIp);
+}
+
 /// <summary>Comando para <see cref="ISandboxSession.ExecAsync"/>.</summary>
 /// <param name="Executable">Ejecutable (se busca en el <c>PATH</c> del contenedor).</param>
 /// <param name="Arguments">Argumentos, sin interpretar por ningún shell.</param>

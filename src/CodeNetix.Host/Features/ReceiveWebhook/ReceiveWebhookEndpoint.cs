@@ -1,34 +1,52 @@
 using CodeNetix.Contracts;
 using CodeNetix.Host.Configuration;
+using CodeNetix.Sandbox;
+using CodeNetix.Sandbox.Gateway;
+using Microsoft.Extensions.Options;
 
 namespace CodeNetix.Host.Features.ReceiveWebhook;
 
 /// <summary>
-/// Puertos (AD-17): <c>:5000</c> sirve el Panel, <c>/api</c> y <c>/hubs</c>; <c>:5001</c> solo
-/// <c>/webhooks/*</c>, sin <c>admin-token</c>. La decisión se toma por
-/// <see cref="ConnectionInfo.LocalPort"/>, nunca por la cabecera <c>Host</c>.
+/// Puertos (AD-7, AD-17): <c>:5000</c> sirve el Panel, <c>/api</c> y <c>/hubs</c>; <c>:5001</c> solo
+/// <c>/webhooks/*</c>, sin <c>admin-token</c>; <c>:8080</c> solo <c>/llm/*</c> (Egress Gateway para el Sandbox).
+/// La decisión se toma por <see cref="ConnectionInfo.LocalPort"/>, nunca por la cabecera <c>Host</c>.
 /// </summary>
 internal static class ListenPorts
 {
     public const int Main = 5000;
     public const int Webhooks = 5001;
+    public const int LlmGateway = SandboxOptions.DefaultLlmGatewayPort;
 
-    public static readonly string[] Urls = [$"http://+:{Main}", $"http://+:{Webhooks}"];
+    public static readonly string[] Urls = [$"http://+:{Main}", $"http://+:{Webhooks}", $"http://+:{LlmGateway}"];
 
-    /// <summary><c>LocalPort</c> = 0 (TestServer) o cualquier otro puerto cuenta como <c>:5000</c>.</summary>
+    /// <summary><c>LocalPort</c> = 0 (TestServer) o cualquier otro puerto distinto de 5001 y 8080 cuenta como <c>:5000</c>.</summary>
     public static bool IsWebhookPort(HttpContext context) => context.Connection.LocalPort == Webhooks;
+
+    public static bool IsLlmGatewayPort(HttpContext context, int configuredPort = LlmGateway) =>
+        context.Connection.LocalPort == (configuredPort > 0 ? configuredPort : LlmGateway);
 }
 
 /// <summary>
-/// Guarda de puerto: en <c>:5001</c> todo lo que no sea <c>/webhooks/*</c> es 404; en <c>:5000</c>,
-/// <c>/webhooks/*</c> es 404. Va antes de la autenticación: en <c>:5001</c> nunca hay 401.
+/// Guarda de puerto: en <c>:5001</c> todo lo que no sea <c>/webhooks/*</c> es 404; en <c>:8080</c> todo lo que no sea
+/// <c>/llm/{**rest}</c> es 404; en <c>:5000</c>, <c>/webhooks/*</c> y <c>/llm/*</c> son 404. Va antes de la
+/// autenticación: en <c>:5001</c> nunca hay 401 y en <c>:8080</c> solo responde el Gateway LLM.
 /// </summary>
-internal sealed class WebhookPortGuardMiddleware(RequestDelegate next)
+internal sealed class WebhookPortGuardMiddleware(RequestDelegate next, IOptionsMonitor<SandboxOptions> sandboxOptions)
 {
     public Task InvokeAsync(HttpContext context)
     {
         var isWebhookPath = context.Request.Path.StartsWithSegments(ReceiveWebhookEndpoint.Prefix, StringComparison.OrdinalIgnoreCase);
-        return isWebhookPath == ListenPorts.IsWebhookPort(context)
+        var hasLlmPrefix = context.Request.Path.StartsWithSegments(LlmReverseProxy.Prefix, StringComparison.OrdinalIgnoreCase, out var llmRest);
+        var isLlmSubPath = hasLlmPrefix && llmRest.HasValue && LlmReverseProxy.IsValidSubPath(llmRest.Value);
+
+        var isWebhookPort = ListenPorts.IsWebhookPort(context);
+        var isLlmPort = ListenPorts.IsLlmGatewayPort(context, sandboxOptions.CurrentValue.LlmGatewayPort);
+
+        var allowed = isWebhookPort ? isWebhookPath
+            : isLlmPort ? isLlmSubPath
+            : !isWebhookPath && !hasLlmPrefix;
+
+        return allowed
             ? next(context)
             // Sin "instance": va antes de ApiRedactionMiddleware y no debe devolver la ruta (podría ser un secreto).
             : Results.Problem(

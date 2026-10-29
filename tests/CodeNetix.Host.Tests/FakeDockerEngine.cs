@@ -40,6 +40,14 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
 
     public bool ImageExists { get; set; } = true;
 
+    public bool NetworkExists { get; set; }
+
+    public bool NetworkInternal { get; set; } = true;
+
+    public string NetworkGateway { get; set; } = "172.28.0.1";
+
+    public string ContainerIp { get; set; } = "172.28.0.2";
+
     /// <summary>Código y mensaje de <c>POST /containers/create</c> si no es 201.</summary>
     public (int Status, string Message)? CreateContainerError { get; set; }
 
@@ -115,6 +123,41 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
 
                 return;
 
+            case ("GET", _) when path.StartsWith("/networks/", StringComparison.Ordinal):
+                if (NetworkExists)
+                {
+                    await WriteJsonAsync(context, new
+                    {
+                        Name = Uri.UnescapeDataString(path["/networks/".Length..]),
+                        Internal = NetworkInternal,
+                        IPAM = new
+                        {
+                            Config = new[] { new { Gateway = NetworkGateway } },
+                        },
+                    });
+                }
+                else
+                {
+                    await ErrorAsync(context, 404, "network not found");
+                }
+
+                return;
+
+            case ("POST", "/networks/create"):
+                NetworkExists = true;
+                context.Response.StatusCode = 201;
+                await WriteJsonAsync(context, new { Id = "net000", Warning = string.Empty });
+                return;
+
+            case ("POST", _) when path.StartsWith("/networks/", StringComparison.Ordinal) && path.EndsWith("/connect", StringComparison.Ordinal):
+                context.Response.StatusCode = 200;
+                return;
+
+            case ("DELETE", _) when path.StartsWith("/networks/", StringComparison.Ordinal):
+                NetworkExists = false;
+                context.Response.StatusCode = 204;
+                return;
+
             case ("POST", "/volumes/create"):
                 context.Response.StatusCode = 201;
                 await WriteJsonAsync(context, new { Name = "v" });
@@ -143,7 +186,18 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
                     return;
                 }
 
-                await WriteJsonAsync(context, new { Id = ContainerId, State = new { Running = _running } });
+                await WriteJsonAsync(context, new
+                {
+                    Id = ContainerId,
+                    State = new { Running = _running },
+                    NetworkSettings = new
+                    {
+                        Networks = new Dictionary<string, object>
+                        {
+                            ["codenetix-sandbox"] = new { IPAddress = ContainerIp },
+                        },
+                    },
+                });
                 return;
 
             case ("PUT", _) when path.EndsWith("/archive", StringComparison.Ordinal):

@@ -48,8 +48,9 @@ docker run -d --name codenetix \
 - `--group-add`: CodeNetix no se ejecuta como root; necesita el grupo propietario del socket para poder usarlo. Con
   Docker Desktop (macOS y Windows) el socket pertenece a root: usa `--group-add 0`.
 - **Seguridad:** quien controla el socket de Docker controla el host. CodeNetix solo lo usa para crear y destruir
-  sus Sandboxes (etiquetados `codenetix.managed=true`), siempre sin red, sin capacidades, sin *bind mounts* y con
-  límites de CPU, memoria y procesos. No expongas el Panel fuera de localhost sin `CODENETIX__Host__AccessToken`.
+  sus Sandboxes (etiquetados `codenetix.managed=true`), conectados únicamente a la red aislada `codenetix-sandbox`
+  (`internal: true`), sin capacidades, sin *bind mounts* y con límites de CPU, memoria y procesos. No expongas el Panel
+  fuera de localhost sin `CODENETIX__Host__AccessToken`.
 
 Comprueba el estado con `curl http://127.0.0.1:5000/api/health` y lanza trabajo con:
 
@@ -64,8 +65,9 @@ docker exec codenetix codenetix fix https://github.com/<owner>/<repo>/issues/<n�
 | Contenedor | `codenetix-sbx-<shortId>`, etiquetas `codenetix.run=<runId>` y `codenetix.managed=true` |
 | Árbol de trabajo | Volumen `codenetix-ws-<runId>` en `/workspace`: solo los archivos versionados del commit base, nunca `.git` ni credenciales |
 | Herramientas | Volumen `codenetix-tools` en solo lectura en `/tools` (se conserva entre Ejecuciones) |
-| Aislamiento | Sin red (`none`), sistema de archivos raíz de solo lectura, `/tmp` en memoria, sin capacidades, `no-new-privileges`, usuario 1000:1000 |
-| Ciclo de vida | Se crea tras clonar el repositorio y se destruye (contenedor y volumen de trabajo) al terminar la Ejecución, en cualquier Estado; al cancelarse se detiene en 10 s como máximo |
+| Red y Egress Gateway | Red Docker `codenetix-sandbox` (`internal: true`, sin salida directa a internet). El Sandbox solo alcanza `gateway`: `:8080/llm` (proxy inverso YARP hacia el Proveedor de `Coder`, sustituyendo el token efímero `cnx-run-<runId>-<nonce>` por la credencial real y registrando `TokensConsumed`) y `:8081` (proxy `CONNECT` TCP restringido a la allowlist de NuGet; cualquier otro destino devuelve `403` y emite `EgressBlocked`) |
+| Aislamiento | Sistema de archivos raíz de solo lectura, `/tmp` en memoria, sin capacidades, `no-new-privileges`, usuario 1000:1000 |
+| Ciclo de vida | Se crea tras clonar el repositorio y se destruye (contenedor, volumen de trabajo y token del Gateway) al terminar la Ejecución, en cualquier Estado; al cancelarse se detiene en 10 s como máximo |
 
 Variables (todas opcionales):
 
@@ -77,6 +79,13 @@ Variables (todas opcionales):
 | `CODENETIX__Sandbox__MemoryMb` | `4096` |
 | `CODENETIX__Sandbox__PidsLimit` | `512` |
 | `CODENETIX__Sandbox__MaxLifetimeMinutes` | `60` |
+| `CODENETIX__Sandbox__NetworkName` | `codenetix-sandbox` |
+| `CODENETIX__Sandbox__HostContainer` | Auto-detectado en contenedor (`/.dockerenv`); vacío si el host corre fuera de Docker |
+| `CODENETIX__Sandbox__LlmGatewayPort` | `8080` |
+| `CODENETIX__Sandbox__ConnectProxyPort` | `8081` |
+| `CODENETIX__Sandbox__AllowedNuGetHosts` | `api.nuget.org:443` |
+| `CODENETIX__Agents__Coder__Provider` | Único Proveedor configurado o `Anthropic` |
+| `CODENETIX__Agents__Coder__Model` | `claude-sonnet-5-5` |
 
 ## Desarrollo
 

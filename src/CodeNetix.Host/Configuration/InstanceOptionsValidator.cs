@@ -103,8 +103,21 @@ internal static class InstanceOptionsValidator
             reasons.Add(InvalidSandboxMaxLifetimeMinutes);
         }
 
-        // Proveedor, URL y modelo del Analista (solo si hay alguna key: si no, ya falta la key).
-        reasons.AddRange(AgentEndpointResolver.ResolveAnalyst(options).Reasons);
+        // Proveedor, URL y modelo del Analista y del Programador (solo si hay alguna key: si no, ya falta la key).
+        var analystReasons = AgentEndpointResolver.ResolveAnalyst(options).Reasons;
+        reasons.AddRange(analystReasons);
+        if (analystReasons.Count == 0
+            || !string.IsNullOrWhiteSpace(options.Agents?.Coder?.Provider)
+            || !string.IsNullOrWhiteSpace(options.Agents?.Coder?.Model))
+        {
+            foreach (var coderReason in AgentEndpointResolver.ResolveCoder(options).Reasons)
+            {
+                if (!reasons.Contains(coderReason, StringComparer.Ordinal))
+                {
+                    reasons.Add(coderReason);
+                }
+            }
+        }
 
         return reasons;
     }

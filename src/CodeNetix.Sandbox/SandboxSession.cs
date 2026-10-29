@@ -8,10 +8,11 @@ using Microsoft.Extensions.Logging;
 namespace CodeNetix.Sandbox;
 
 /// <summary>
-/// Sandbox vivo de una Ejecución (AD-6). Los comandos se ejecutan por exec como <c>1000:1000</c>, envueltos en
+/// Sandbox vivo de una Ejecución (AD-6, AD-7). Los comandos se ejecutan por exec como <c>1000:1000</c>, envueltos en
 /// <c>timeout</c> para que el proceso muera al vencer el plazo y la sesión siga usable. Se detiene (<c>stop</c> con
 /// 10 s de gracia y, si sigue vivo, <c>kill</c>) al cancelarse el token de la Ejecución, al vencer la vida máxima o con
-/// <see cref="StopAsync"/>. <see cref="DisposeAsync"/> lo detiene y borra el contenedor y el volumen de trabajo.
+/// <see cref="StopAsync"/>, revocando su credencial efímera en <see cref="ISandboxGateway"/>. <see cref="DisposeAsync"/>
+/// lo detiene y borra el contenedor y el volumen de trabajo.
 /// </summary>
 internal sealed partial class SandboxSession : ISandboxSession
 {
@@ -30,6 +31,7 @@ internal sealed partial class SandboxSession : ISandboxSession
     internal static readonly TimeSpan MaxCommandTimeout = TimeSpan.FromHours(24);
 
     private readonly DockerClient _docker;
+    private readonly ISandboxGateway? _gateway;
     private readonly ILogger _logger;
     private readonly CancellationTokenSource _lifetime;
     private readonly CancellationTokenRegistration _runRegistration;
@@ -46,14 +48,18 @@ internal sealed partial class SandboxSession : ISandboxSession
         string volumeName,
         TimeSpan maxLifetime,
         ILogger logger,
-        CancellationToken runToken)
+        CancellationToken runToken,
+        ISandboxGateway? gateway = null,
+        string apiKey = "")
     {
         _docker = docker;
+        _gateway = gateway;
         _logger = logger;
         RunId = runId;
         ContainerId = containerId;
         Image = image;
         VolumeName = volumeName;
+        ApiKey = apiKey;
 
         // Vida máxima: al vencer, la sesión detiene el contenedor (los comandos en curso terminan).
         _lifetime = new CancellationTokenSource(maxLifetime);
@@ -74,6 +80,8 @@ internal sealed partial class SandboxSession : ISandboxSession
     public string Image { get; }
 
     public string VolumeName { get; }
+
+    internal string ApiKey { get; }
 
     /// <summary>Se ha pedido la parada (por cancelación, vida máxima, <see cref="StopAsync"/> o liberación).</summary>
     public bool IsStopping
@@ -207,6 +215,7 @@ internal sealed partial class SandboxSession : ISandboxSession
 
     public Task StopAsync()
     {
+        _gateway?.Revoke(RunId);
         lock (_gate)
         {
             return _stopTask ??= Task.Run(StopCoreAsync);
@@ -220,6 +229,7 @@ internal sealed partial class SandboxSession : ISandboxSession
             return;
         }
 
+        _gateway?.Revoke(RunId);
         await _runRegistration.DisposeAsync().ConfigureAwait(false);
         await _lifetimeRegistration.DisposeAsync().ConfigureAwait(false);
 
