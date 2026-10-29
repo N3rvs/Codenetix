@@ -4,6 +4,8 @@
 #   docker build -f docker/sandbox.Dockerfile -t codenetix-sandbox .
 #
 # - SDK de .NET 10 + Node 24 LTS (sin @anthropic-ai/claude-code: se instala en el volumen codenetix-tools, 2.3).
+# - /tools (volumen codenetix-tools) es del usuario sandbox para que la provisión inicial pueda escribir en él, y
+#   /tools/node_modules/.bin:/tools/bin van primero en el PATH.
 # - Usuario no root "sandbox" (uid/gid 1000) y WORKDIR /workspace (volumen codenetix-ws-<runId>).
 # - CodeNetix lo arranca con el sistema de archivos raíz en solo lectura, /tmp en tmpfs, sin red y sin
 #   capacidades; HOME y la caché de NuGet viven en /tmp.
@@ -28,10 +30,11 @@ RUN set -eux; \
     groupadd --gid 1000 sandbox; \
     useradd --uid 1000 --gid 1000 --no-create-home --home-dir /tmp/home --shell /bin/sh sandbox; \
     mkdir -p /workspace /tools; \
-    chown sandbox:sandbox /workspace; \
+    chown sandbox:sandbox /workspace /tools; \
     chmod 0755 /tools
 
-ENV HOME=/tmp/home \
+ENV PATH=/tools/node_modules/.bin:/tools/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    HOME=/tmp/home \
     DOTNET_CLI_HOME=/tmp/home \
     NUGET_PACKAGES=/tmp/nuget \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \

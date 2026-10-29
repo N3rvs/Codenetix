@@ -59,6 +59,9 @@ public static class RunStateExtensions
 [JsonDerivedType(typeof(SandboxReleased), nameof(SandboxReleased))]
 [JsonDerivedType(typeof(TokensConsumed), nameof(TokensConsumed))]
 [JsonDerivedType(typeof(EgressBlocked), nameof(EgressBlocked))]
+[JsonDerivedType(typeof(OutputAppended), nameof(OutputAppended))]
+[JsonDerivedType(typeof(OutputTruncated), nameof(OutputTruncated))]
+[JsonDerivedType(typeof(CodingAttemptFailed), nameof(CodingAttemptFailed))]
 public abstract record RunEvent
 {
     /// <summary>Monotónico por Ejecución, empieza en 1 y no tiene huecos.</summary>
@@ -112,6 +115,23 @@ public sealed record TokensConsumed(string Role, string Provider, string Model, 
 
 /// <summary>Intento de salida desde el Sandbox rechazado por el Egress Gateway (FR-27, AD-7).</summary>
 public sealed record EgressBlocked(string Target, string Reason) : RunEvent;
+
+/// <summary>
+/// Fragmento de la salida de un proceso del Sandbox (AD-3). El sumidero lo redacta y limita la salida acumulada a
+/// <see cref="OutputTruncated.DefaultMaxBytes"/> bytes por Etapa.
+/// </summary>
+/// <param name="Stream"><c>stdout</c> o <c>stderr</c>.</param>
+public sealed record OutputAppended(string Text, string Stream = "stdout") : RunEvent;
+
+/// <summary>La salida de la Etapa ha superado <see cref="MaxBytes"/> bytes y el resto se descarta (se emite una sola vez).</summary>
+public sealed record OutputTruncated(int MaxBytes = OutputTruncated.DefaultMaxBytes) : RunEvent
+{
+    /// <summary>5 MiB por Etapa.</summary>
+    public const int DefaultMaxBytes = 5 * 1024 * 1024;
+}
+
+/// <summary>El intento <see cref="Attempt"/> del Programador ha fallado por <see cref="Reason"/> (FR-11).</summary>
+public sealed record CodingAttemptFailed(int Attempt, string Reason) : RunEvent;
 
 /// <summary>
 /// Único punto de escritura de <c>run_events</c> (AD-3), implementado solo por Pipeline. Aplica

@@ -87,6 +87,10 @@ namespace CodeNetix.Pipeline.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("base_sha");
 
+                    b.Property<int>("CodingAttempts")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("coding_attempts");
+
                     b.Property<long>("CreatedAt")
                         .HasColumnType("INTEGER")
                         .HasColumnName("created_at");
@@ -98,6 +102,10 @@ namespace CodeNetix.Pipeline.Data.Migrations
                     b.Property<Guid>("EventId")
                         .HasColumnType("TEXT")
                         .HasColumnName("event_id");
+
+                    b.Property<int>("FailedCodingAttempts")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("failed_coding_attempts");
 
                     b.Property<string>("FailureDetail")
                         .HasColumnType("TEXT")

@@ -283,6 +283,15 @@ internal sealed class DockerClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary><c>POST /containers/{id}/wait</c>: espera a que el contenedor termine y devuelve su código de salida.</summary>
+    public async Task<int> WaitContainerAsync(string id, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        using var response = await SendVersionedAsync(HttpMethod.Post, $"/containers/{EscapeName(id)}/wait", null, timeout, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        using var json = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+        return json.RootElement.TryGetProperty("StatusCode", out var code) && code.ValueKind == JsonValueKind.Number ? code.GetInt32() : -1;
+    }
+
     public async Task StartContainerAsync(string id, CancellationToken cancellationToken)
     {
         using var response = await SendVersionedAsync(HttpMethod.Post, $"/containers/{EscapeName(id)}/start", null, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);

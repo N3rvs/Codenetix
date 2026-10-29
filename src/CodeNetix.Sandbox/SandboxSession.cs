@@ -50,7 +50,8 @@ internal sealed partial class SandboxSession : ISandboxSession
         ILogger logger,
         CancellationToken runToken,
         ISandboxGateway? gateway = null,
-        string apiKey = "")
+        string apiKey = "",
+        string baseDigest = "")
     {
         _docker = docker;
         _gateway = gateway;
@@ -60,6 +61,7 @@ internal sealed partial class SandboxSession : ISandboxSession
         Image = image;
         VolumeName = volumeName;
         ApiKey = apiKey;
+        BaseDigest = baseDigest;
 
         // Vida máxima: al vencer, la sesión detiene el contenedor (los comandos en curso terminan).
         _lifetime = new CancellationTokenSource(maxLifetime);
@@ -82,6 +84,29 @@ internal sealed partial class SandboxSession : ISandboxSession
     public string VolumeName { get; }
 
     internal string ApiKey { get; }
+
+    /// <summary>Huella (<see cref="WorkspaceManifest"/>) del árbol del <c>BaseSha</c> subido a <c>/workspace</c>.</summary>
+    internal string BaseDigest { get; }
+
+    /// <summary>Tiempo máximo del cálculo de la huella de <c>/workspace</c>.</summary>
+    internal static readonly TimeSpan ManifestTimeout = TimeSpan.FromMinutes(5);
+
+    public async Task<bool> HasChangesAsync(CancellationToken cancellationToken)
+    {
+        var command = new SandboxCommand("sh", ["-c", WorkspaceManifest.Script])
+        {
+            WorkingDirectory = SandboxManager.WorkspacePath,
+            Timeout = ManifestTimeout,
+        };
+        var result = await ExecAsync(command, cancellationToken).ConfigureAwait(false);
+        if (result.TimedOut || result.ExitCode != 0 || WorkspaceManifest.ParseDigest(result.StdOut) is not { } digest)
+        {
+            var detail = result.TimedOut ? "timeout" : $"código {result.ExitCode.ToString(CultureInfo.InvariantCulture)}";
+            throw new SandboxUnavailableException($"no se ha podido inspeccionar /workspace ({detail})");
+        }
+
+        return !string.Equals(digest, BaseDigest, StringComparison.Ordinal);
+    }
 
     /// <summary>Se ha pedido la parada (por cancelación, vida máxima, <see cref="StopAsync"/> o liberación).</summary>
     public bool IsStopping

@@ -33,6 +33,7 @@ public sealed partial class NuGetConnectProxy(
     private static readonly byte[] BadGatewayResponse = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"u8.ToArray();
 
     private readonly ConcurrentDictionary<long, Task> _activeConnections = new();
+    private readonly ConcurrentDictionary<string, int> _temporaryHosts = new(StringComparer.Ordinal);
     private CancellationTokenSource? _stoppingCts;
     private TcpListener? _listener;
     private Task? _acceptLoop;
@@ -75,7 +76,8 @@ public sealed partial class NuGetConnectProxy(
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        if (_listener is null)
+        var listener = Interlocked.Exchange(ref _listener, null);
+        if (listener is null)
         {
             return;
         }
@@ -93,7 +95,7 @@ public sealed partial class NuGetConnectProxy(
 
         try
         {
-            _listener.Stop();
+            listener.Stop();
         }
         catch (SocketException)
         {
@@ -122,7 +124,7 @@ public sealed partial class NuGetConnectProxy(
             }
         }
 
-        _listener = null;
+
     }
 
     public async ValueTask DisposeAsync()
@@ -138,6 +140,60 @@ public sealed partial class NuGetConnectProxy(
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    /// <summary>
+    /// Permite temporalmente túneles hacia <paramref name="hostPort"/> (<c>host:puerto</c>) hasta que se libere el
+    /// <see cref="IDisposable"/> devuelto. Solo para la provisión de <c>codenetix-tools</c> (p. ej.
+    /// <c>registry.npmjs.org:443</c>); admite aperturas anidadas (cuenta de referencias).
+    /// </summary>
+    public IDisposable AllowTemporaryHost(string hostPort)
+    {
+        if (!TryParseHostPort(hostPort, out _, out _, out var normalized))
+        {
+            throw new ArgumentException($"Destino no válido: '{hostPort}'.", nameof(hostPort));
+        }
+
+        var key = normalized.ToLowerInvariant();
+        _temporaryHosts.AddOrUpdate(key, 1, (_, count) => count + 1);
+        LogTemporaryHostAllowed(key);
+        return new TemporaryHostLease(this, key);
+    }
+
+    /// <summary>¿Está <paramref name="normalizedTarget"/> abierto temporalmente?</summary>
+    internal bool IsTemporarilyAllowed(string normalizedTarget) =>
+        _temporaryHosts.TryGetValue(normalizedTarget.ToLowerInvariant(), out var count) && count > 0;
+
+    private void ReleaseTemporaryHost(string key)
+    {
+        while (_temporaryHosts.TryGetValue(key, out var count))
+        {
+            if (count <= 1)
+            {
+                if (_temporaryHosts.TryRemove(KeyValuePair.Create(key, count)))
+                {
+                    LogTemporaryHostRevoked(key);
+                    return;
+                }
+            }
+            else if (_temporaryHosts.TryUpdate(key, count - 1, count))
+            {
+                return;
+            }
+        }
+    }
+
+    private sealed class TemporaryHostLease(NuGetConnectProxy owner, string key) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                owner.ReleaseTemporaryHost(key);
+            }
+        }
+    }
 
     internal static bool IsAllowedHost(string normalizedTarget, IList<string>? allowedHosts)
     {
@@ -284,7 +340,7 @@ public sealed partial class NuGetConnectProxy(
             }
 
             if (!TryParseHostPort(rawTarget, out var targetHost, out var targetPort, out var normalizedTarget)
-                || !IsAllowedHost(normalizedTarget, options.CurrentValue.AllowedNuGetHosts))
+                || !(IsAllowedHost(normalizedTarget, options.CurrentValue.AllowedNuGetHosts) || IsTemporarilyAllowed(normalizedTarget)))
             {
                 await clientStream.WriteAsync(ForbiddenResponse, stoppingToken).ConfigureAwait(false);
                 await clientStream.FlushAsync(stoppingToken).ConfigureAwait(false);
@@ -491,6 +547,12 @@ public sealed partial class NuGetConnectProxy(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Proxy CONNECT de NuGet escuchando en el puerto {Port}.")]
     private partial void LogStarted(int port);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Proxy CONNECT: '{Target}' permitido temporalmente (provisión de herramientas).")]
+    private partial void LogTemporaryHostAllowed(string target);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Proxy CONNECT: permiso temporal de '{Target}' revocado.")]
+    private partial void LogTemporaryHostRevoked(string target);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "Salida bloqueada en el proxy CONNECT hacia '{Target}' ({Reason}) sin sesión activa asociada.")]
     private partial void LogBlockedWithoutRun(string target, string reason);

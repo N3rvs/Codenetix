@@ -222,7 +222,7 @@ public sealed class FixFollowTests : IDisposable
         Assert.Matches(new Regex("^Evento [0-9a-f-]{36} registrado\\.$"), lines[0]);
         Assert.Matches(new Regex("^Ejecución [0-9a-f-]{36}:$"), lines[1]);
         var events = lines.Skip(2).ToList();
-        Assert.Equal(8, events.Count);
+        Assert.Equal(10, events.Count);
         Assert.Equal("[1] RunCreated github:o/r#12", events[0]);
         Assert.Equal("[2] StateChanged → Received", events[1]);
         Assert.Matches(new Regex("^\\[3\\] RepositoryPrepared [0-9a-f]{40}$"), events[2]);
@@ -230,7 +230,9 @@ public sealed class FixFollowTests : IDisposable
         Assert.Equal("[5] StateChanged Received → Analyzing", events[4]);
         Assert.Equal("[6] SandboxCreated " + FakeSandboxManager.Image, events[5]);
         Assert.Equal("[7] SpecGenerated claude-sonnet-5-5 (1 intento(s))", events[6]);
-        Assert.Equal("[8] StateChanged Analyzing → Failed (StageError: Programación no disponible)", events[7]);
+        Assert.Equal("[8] StateChanged Analyzing → Coding", events[7]);
+        Assert.Equal("[9] OutputAppended", events[8]);
+        Assert.Equal("[10] StateChanged Coding → Failed (StageError: Pruebas no disponibles)", events[9]);
         Assert.Empty(_stderr.ToString());
     }
 

@@ -46,6 +46,37 @@ internal sealed class PipelineRun
     /// </summary>
     public string? EffectiveConfigJson { get; private set; }
 
+    /// <summary>Intentos del Programador realizados (FR-11, AD-16 paso 4), fallidos o no.</summary>
+    public int CodingAttempts { get; private set; }
+
+    /// <summary>Intentos del Programador que han terminado en error, timeout o sin cambios.</summary>
+    public int FailedCodingAttempts { get; private set; }
+
+    /// <summary>Registra un intento del Programador terminado bien. Solo en <c>Coding</c>.</summary>
+    public void CompleteCodingAttempt()
+    {
+        if (State != RunState.Coding)
+        {
+            throw new InvalidRunTransitionException(Id, State, nameof(CompleteCodingAttempt));
+        }
+
+        CodingAttempts++;
+    }
+
+    /// <summary>Registra un intento fallido del Programador y devuelve su evento. Solo en <c>Coding</c>.</summary>
+    public CodingAttemptFailed RecordFailedCodingAttempt(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        if (State != RunState.Coding)
+        {
+            throw new InvalidRunTransitionException(Id, State, nameof(RecordFailedCodingAttempt));
+        }
+
+        CodingAttempts++;
+        FailedCodingAttempts++;
+        return new CodingAttemptFailed(CodingAttempts, reason);
+    }
+
     /// <summary>Registra el commit base. Solo en <c>Received</c> y una sola vez.</summary>
     public RepositoryPrepared RecordBaseSha(string baseSha)
     {

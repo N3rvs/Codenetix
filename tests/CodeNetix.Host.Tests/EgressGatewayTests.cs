@@ -532,6 +532,87 @@ public sealed class EgressGatewayTests : IDisposable
     }
 
     [Fact]
+    public async Task NuGet_connect_proxy_temporary_host_lease_allows_CONNECT_and_revokes_after_dispose()
+    {
+        var runId = Guid.NewGuid();
+        var gateway = new SandboxGatewayRegistry();
+        gateway.Register(runId);
+        var sink = new CapturingRunEventSink();
+
+        using var echoServer = new TcpListener(IPAddress.Loopback, 0);
+        echoServer.Start();
+        var echoPort = ((IPEndPoint)echoServer.LocalEndpoint).Port;
+        var tempHost = $"127.0.0.1:{echoPort}";
+
+        var echoTask = Task.Run(
+            async () =>
+            {
+                using var accepted = await echoServer.AcceptTcpClientAsync(TestContext.Current.CancellationToken);
+                await using var netStream = accepted.GetStream();
+                var buf = new byte[64];
+                var read = await netStream.ReadAsync(buf, TestContext.Current.CancellationToken);
+                if (read > 0)
+                {
+                    await netStream.WriteAsync(buf.AsMemory(0, read), TestContext.Current.CancellationToken);
+                }
+            },
+            Ct);
+
+        var options = new StaticOptionsMonitor<SandboxOptions>(new SandboxOptions
+        {
+            ConnectProxyPort = 0,
+            AllowedNuGetHosts = ["api.nuget.org:443"],
+        });
+
+        await using var proxy = new NuGetConnectProxy(gateway, sink, options, NullLogger<NuGetConnectProxy>.Instance);
+        await proxy.StartAsync(Ct);
+        try
+        {
+            // 1) Con el lease temporal activo: CONNECT 127.0.0.1:{echoPort} responde 200 Connection Established.
+            using (proxy.AllowTemporaryHost(tempHost))
+            {
+                using var client = new TcpClient();
+                await client.ConnectAsync(IPAddress.Loopback, proxy.BoundPort, Ct);
+                await using var stream = client.GetStream();
+                await SendRawAsync(stream, $"CONNECT {tempHost} HTTP/1.1\r\nHost: {tempHost}\r\n\r\n");
+
+                var statusLine = await ReadHeadersAsync(stream);
+                Assert.StartsWith("HTTP/1.1 200 Connection Established", statusLine, StringComparison.Ordinal);
+
+                var payload = "ping-temp-host"u8.ToArray();
+                await stream.WriteAsync(payload, Ct);
+                var echoed = new byte[payload.Length];
+                await stream.ReadExactlyAsync(echoed, Ct);
+                Assert.Equal(payload, echoed);
+            }
+
+            await echoTask;
+            Assert.Empty(sink.Events);
+
+            // 2) Con el lease revocado tras Dispose(): CONNECT responde 403 Forbidden y emite EgressBlocked.
+            using (var client = new TcpClient())
+            {
+                await client.ConnectAsync(IPAddress.Loopback, proxy.BoundPort, Ct);
+                await using var stream = client.GetStream();
+                await SendRawAsync(stream, $"CONNECT {tempHost} HTTP/1.1\r\nHost: {tempHost}\r\n\r\n");
+
+                var statusLine = await ReadHeadersAsync(stream);
+                Assert.StartsWith("HTTP/1.1 403 Forbidden", statusLine, StringComparison.Ordinal);
+            }
+
+            var blocked = await WaitForEventCountAsync(sink, 1);
+            Assert.Equal(runId, blocked.RunId);
+            var hostEvent = Assert.IsType<EgressBlocked>(blocked.Payload);
+            Assert.Equal(tempHost, hostEvent.Target);
+            Assert.Contains("lista permitida de NuGet", hostEvent.Reason, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            await proxy.StopAsync(Ct);
+        }
+    }
+
+    [Fact]
     public void SandboxGatewayRegistry_ResolveRunId_distinguishes_multiple_sessions_and_rejects_unauthenticated_or_unknown_ip()
     {
         var registry = new SandboxGatewayRegistry();

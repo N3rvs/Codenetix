@@ -45,6 +45,7 @@ internal sealed partial class RunOrchestrator(
     IRepositoryWorkspace workspace,
     IIssueReader issues,
     IAnalyst analyst,
+    ICodingAgent coder,
     IIssueNotifier notifier,
     IRunEventSink events,
     ISandboxManager sandboxes,
@@ -52,7 +53,7 @@ internal sealed partial class RunOrchestrator(
     ILogger<RunOrchestrator> logger) : IRunOrchestrator
 {
     /// <summary>Detalle del puente provisional tras una Spec válida (hasta que exista el Programador, Épica 2).</summary>
-    public const string Detail = "Programación no disponible";
+    public const string Detail = "Pruebas no disponibles";
 
     public const string IssueUnreadablePrefix = "no se pudo leer la issue: ";
 
@@ -93,8 +94,14 @@ internal sealed partial class RunOrchestrator(
 
             if (run.State == RunState.Analyzing)
             {
-                // Puente provisional: el Programador llega en la Épica 2 (nunca StartCoding todavía).
-                await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+                await log.AddTransitionAsync(context, run, run.StartCoding(), cancellationToken).ConfigureAwait(false);
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            if (run.State == RunState.Coding)
+            {
+                await CodeAsync(context, run, sandbox, cancellationToken).ConfigureAwait(false);
+
             }
 
             completed = true;
@@ -317,6 +324,100 @@ internal sealed partial class RunOrchestrator(
         }
 
         await events.AppendAsync(run.Id, null, outcome, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// AD-16 paso 4: bucle de intentos del Programador. Tras un intento exitoso, hoy se detiene en el puente
+    /// provisional a la historia 2.4 (Failed(StageError, "Pruebas no disponibles")).
+    /// </summary>
+    private async Task CodeAsync(PipelineDbContext context, PipelineRun run, ISandboxSession? sandbox, CancellationToken cancellationToken)
+    {
+        if (sandbox is null)
+        {
+            await FailAsync(context, run, FailureReason.StageError, "el Sandbox no está disponible", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (!GitHubObjectKey.TryParse(run.ObjectKey, out var owner, out var repo, out var number))
+        {
+            await FailAsync(context, run, FailureReason.StageError, $"objeto no admitido: {run.ObjectKey}", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (run.GetEffectiveConfig() is not { } config)
+        {
+            await FailAsync(context, run, FailureReason.StageError, "la Ejecución no tiene configuración efectiva", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        GitHubIssue issue;
+        try
+        {
+            issue = await issues.GetAsync(owner, repo, number, cancellationToken).ConfigureAwait(false);
+        }
+        catch (GitHubUnavailableException ex)
+        {
+            await FailAsync(context, run, FailureReason.StageError, Truncate(IssueUnreadablePrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var specRecord = await context.Specs.SingleOrDefaultAsync(s => s.RunId == run.Id, cancellationToken).ConfigureAwait(false);
+        if (specRecord is null)
+        {
+            await FailAsync(context, run, FailureReason.StageError, "no se encontró la Spec de la Ejecución", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        Spec spec;
+        try
+        {
+            spec = SpecSerializer.Deserialize(specRecord.SpecJson);
+        }
+        catch (Exception ex)
+        {
+            await FailAsync(context, run, FailureReason.StageError, Truncate("error al deserializar la Spec: " + ex.Message), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        string? feedback = null;
+        while (run.State == RunState.Coding && run.CodingAttempts < config.MaxCodingAttempts)
+        {
+            var attemptNumber = run.CodingAttempts + 1;
+            var input = new CodingInput(run.Id, attemptNumber, issue.Title, issue.Body, spec, config, sandbox, feedback);
+            var result = await coder.RunAsync(input, cancellationToken).ConfigureAwait(false);
+
+            switch (result)
+            {
+                case CodingResult.Completed:
+                    run.CompleteCodingAttempt();
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                    // Puente provisional hasta la historia 2.4 (ITestRunner):
+                    await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+                    return;
+
+                case CodingResult.Failed failed:
+                    var attemptFailedEvent = run.RecordFailedCodingAttempt(failed.Reason);
+                    await log.AddAsync(context, run.Id, attemptFailedEvent, cancellationToken).ConfigureAwait(false);
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                    feedback = failed.Reason;
+                    if (run.CodingAttempts >= config.MaxCodingAttempts)
+                    {
+                        await FailAsync(context, run, FailureReason.TestsFailed, Truncate(failed.Reason), cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+                    break;
+
+                default:
+                    throw new InvalidOperationException($"Resultado del Programador desconocido: {result.GetType().Name}.");
+            }
+        }
+
+        if (run.State == RunState.Coding)
+        {
+            await FailAsync(context, run, FailureReason.TestsFailed, "reintentos agotados", cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task FailAsync(PipelineDbContext context, PipelineRun run, FailureReason reason, string detail, CancellationToken cancellationToken)

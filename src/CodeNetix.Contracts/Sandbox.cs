@@ -40,9 +40,32 @@ public interface ISandboxSession : IAsyncDisposable
     Task<SandboxExecResult> ExecAsync(SandboxCommand command, CancellationToken cancellationToken);
 
     /// <summary>
+    /// <c>true</c> si algún archivo o enlace de <c>/workspace</c> se ha modificado, añadido o eliminado respecto al
+    /// árbol del <c>BaseSha</c> subido al crear el Sandbox (no usa <c>.git</c>, que no existe en el Sandbox). Lanza
+    /// <see cref="SandboxUnavailableException"/> si no se puede inspeccionar el árbol.
+    /// </summary>
+    Task<bool> HasChangesAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Detiene el contenedor: <c>stop</c> con 10 s de gracia y, si sigue vivo, <c>kill</c>. Idempotente; nunca lanza.
     /// </summary>
     Task StopAsync();
+}
+
+/// <summary>
+/// Provisión de herramientas en el volumen <c>codenetix-tools</c> (AD-6). Solo la implementa el módulo Sandbox.
+/// </summary>
+public interface ISandboxToolsProvisioner
+{
+    /// <summary>Versión fijada de <c>@anthropic-ai/claude-code</c>.</summary>
+    public const string ClaudeCliVersion = "2.1.311";
+
+    /// <summary>
+    /// Garantiza que <c>claude</c> está disponible en <paramref name="session"/>. Si no está instalado en
+    /// <c>codenetix-tools</c>, lo instala con un contenedor efímero abriendo <c>registry.npmjs.org:443</c> en el
+    /// Gateway solo durante la instalación. Lanza <see cref="SandboxUnavailableException"/> si no se puede instalar.
+    /// </summary>
+    Task EnsureClaudeCliAsync(ISandboxSession session, CancellationToken cancellationToken);
 }
 
 /// <summary>Sesión activa registrada en el Egress Gateway para una Ejecución (AD-7).</summary>

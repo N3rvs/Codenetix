@@ -458,7 +458,7 @@ public sealed class SubmitManualEventTests : IDisposable
         await using var check = new SqliteConnection($"Data Source={DatabasePath}");
         await check.OpenAsync(Ct);
         Assert.Equal(2L, await ScalarAsync(check, "SELECT COUNT(*) FROM __ef_migrations_ing;")); // InitialIngestion + AddEventDispatch
-        Assert.Equal(3L, await ScalarAsync(check, "SELECT COUNT(*) FROM __ef_migrations_run;")); // InitialPipeline + AddRepositoryConfig + AddRunSpecs
+        Assert.Equal(4L, await ScalarAsync(check, "SELECT COUNT(*) FROM __ef_migrations_run;")); // InitialPipeline + AddRepositoryConfig + AddRunSpecs + AddCodingAttempts
     }
 
     // --- Utilidades ----------------------------------------------------------------

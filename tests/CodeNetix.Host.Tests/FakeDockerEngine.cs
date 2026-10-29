@@ -223,6 +223,11 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
                 context.Response.StatusCode = 204;
                 return;
 
+            case ("POST", _) when path.EndsWith("/wait", StringComparison.Ordinal):
+                context.Response.StatusCode = 200;
+                await WriteJsonAsync(context, new { StatusCode = 0 });
+                return;
+
             case ("POST", _) when path.EndsWith("/exec", StringComparison.Ordinal):
                 context.Response.StatusCode = 201;
                 await WriteJsonAsync(context, new { Id = ExecId });

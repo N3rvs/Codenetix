@@ -1,6 +1,7 @@
 using System.Formats.Tar;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 
 namespace CodeNetix.Sandbox;
 
@@ -30,6 +31,8 @@ internal sealed class WorkspaceArchiveContent : HttpContent
 
     private readonly Stream _source;
 
+    private WorkspaceManifest _manifest = new();
+
     public WorkspaceArchiveContent(Stream source)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -43,6 +46,7 @@ internal sealed class WorkspaceArchiveContent : HttpContent
     protected override async Task SerializeToStreamAsync(Stream stream, TransportContext? context, CancellationToken cancellationToken)
     {
         _source.Position = 0;
+        _manifest = new WorkspaceManifest();
         var reader = new TarReader(_source, leaveOpen: true);
         await using (reader.ConfigureAwait(false))
         {
@@ -78,9 +82,50 @@ internal sealed class WorkspaceArchiveContent : HttpContent
                     }
 
                     var copy = Owned(new PaxTarEntry(entry));
+                    await RecordAsync(_manifest, segments, entry, copy, cancellationToken).ConfigureAwait(false);
                     await writer.WriteEntryAsync(copy, cancellationToken).ConfigureAwait(false);
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Huella (<see cref="WorkspaceManifest"/>) del árbol subido, calculada mientras se serializa el cuerpo (sin
+    /// peticiones adicionales a Docker). Solo es válida tras una serialización completa.
+    /// </summary>
+    public string BaseDigest => _manifest.ComputeDigest();
+
+    /// <summary>Anota en <paramref name="manifest"/> un archivo regular (su SHA-256) o un enlace simbólico escrito.</summary>
+    private static async Task RecordAsync(WorkspaceManifest manifest, string[] segments, TarEntry entry, PaxTarEntry copy, CancellationToken cancellationToken)
+    {
+        var path = string.Join('/', segments);
+        switch (entry.EntryType)
+        {
+            case TarEntryType.SymbolicLink:
+                manifest.AddSymlink(path, entry.LinkName);
+                break;
+
+            case TarEntryType.RegularFile or TarEntryType.V7RegularFile:
+                if (copy.DataStream is not { } data)
+                {
+                    manifest.AddFile(path, SHA256.HashData(ReadOnlySpan<byte>.Empty));
+                    break;
+                }
+
+                if (!data.CanSeek)
+                {
+                    // Sin posibilidad de rebobinar: se copia para poder leerlo dos veces (hash y escritura).
+                    var buffer = new MemoryStream();
+                    await data.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    buffer.Position = 0;
+                    copy.DataStream = buffer;
+                    data = buffer;
+                }
+
+                var start = data.Position;
+                manifest.AddFile(path, await SHA256.HashDataAsync(data, cancellationToken).ConfigureAwait(false));
+                data.Position = start;
+                break;
         }
     }
 
