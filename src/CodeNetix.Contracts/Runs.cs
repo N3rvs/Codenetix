@@ -57,6 +57,8 @@ public static class RunStateExtensions
 [JsonDerivedType(typeof(NotificationFailed), nameof(NotificationFailed))]
 [JsonDerivedType(typeof(SandboxCreated), nameof(SandboxCreated))]
 [JsonDerivedType(typeof(SandboxReleased), nameof(SandboxReleased))]
+[JsonDerivedType(typeof(TokensConsumed), nameof(TokensConsumed))]
+[JsonDerivedType(typeof(EgressBlocked), nameof(EgressBlocked))]
 public abstract record RunEvent
 {
     /// <summary>Monotónico por Ejecución, empieza en 1 y no tiene huecos.</summary>
@@ -104,6 +106,12 @@ public sealed record SandboxCreated(string Image) : RunEvent;
 
 /// <summary>Se ha liberado el Sandbox de la Ejecución: contenedor y volumen de trabajo borrados (AD-16 paso 8).</summary>
 public sealed record SandboxReleased : RunEvent;
+
+/// <summary>Consumo de tokens registrado por una llamada al Proveedor (AD-7, AD-15).</summary>
+public sealed record TokensConsumed(string Role, string Provider, string Model, int InputTokens, int OutputTokens) : RunEvent;
+
+/// <summary>Intento de salida desde el Sandbox rechazado por el Egress Gateway (FR-27, AD-7).</summary>
+public sealed record EgressBlocked(string Target, string Reason) : RunEvent;
 
 /// <summary>
 /// Único punto de escritura de <c>run_events</c> (AD-3), implementado solo por Pipeline. Aplica

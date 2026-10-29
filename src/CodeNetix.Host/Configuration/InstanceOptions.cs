@@ -39,6 +39,9 @@ internal sealed class AgentsInstanceOptions
 
     /// <summary><c>CODENETIX__Agents__Analyst__*</c>.</summary>
     public AgentRoleInstanceOptions Analyst { get; set; } = new();
+
+    /// <summary><c>CODENETIX__Agents__Coder__*</c>.</summary>
+    public AgentRoleInstanceOptions Coder { get; set; } = new();
 }
 
 internal sealed class AgentRoleInstanceOptions

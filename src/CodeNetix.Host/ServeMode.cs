@@ -1,5 +1,6 @@
 using CodeNetix.Agents;
 using CodeNetix.Contracts;
+using CodeNetix.GitHub;
 using CodeNetix.Host.Access;
 using CodeNetix.Host.Configuration;
 using CodeNetix.Host.Features.GetEvent;
@@ -8,12 +9,12 @@ using CodeNetix.Host.Features.GetRun;
 using CodeNetix.Host.Features.GetRunEvents;
 using CodeNetix.Host.Features.ReceiveWebhook;
 using CodeNetix.Host.Features.SubmitManualEvent;
-using CodeNetix.GitHub;
 using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
 using CodeNetix.Persistence;
 using CodeNetix.Pipeline;
 using CodeNetix.Sandbox;
+using CodeNetix.Sandbox.Gateway;
 using Microsoft.Extensions.Logging.Console;
 using Microsoft.Extensions.Options;
 
@@ -21,7 +22,8 @@ namespace CodeNetix.Host;
 
 /// <summary>
 /// <c>codenetix serve</c>: host completo. <c>:5000</c> sirve el Panel, <c>/api</c> y <c>/hubs</c>;
-/// <c>:5001</c>, solo <c>/webhooks/*</c> (AD-17).
+/// <c>:5001</c>, solo <c>/webhooks/*</c> (AD-17); <c>:8080</c>, solo <c>/llm/*</c> y <c>:8081</c>, proxy <c>CONNECT</c>
+/// de NuGet para el Sandbox (AD-7).
 /// </summary>
 internal static class ServeMode
 {
@@ -35,12 +37,15 @@ internal static class ServeMode
     public static async Task<int> RunAsync(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
-        builder.WebHost.UseUrls(ListenPorts.Urls);
 
         // Solo Host lee el entorno. Configuración de instancia = archivo YAML opcional + CODENETIX__*
         // (el entorno tiene prioridad: el archivo se inserta antes de las variables de entorno).
         // Un archivo inválido lanza InstanceConfigurationException aquí, antes de construir el host.
         builder.Configuration.AddInstanceConfigFile();
+
+        var configuredLlmPort = builder.Configuration.GetValue<int?>(SandboxSectionName + ":LlmGatewayPort");
+        var llmPort = configuredLlmPort is > 0 ? configuredLlmPort.Value : ListenPorts.LlmGateway;
+        builder.WebHost.UseUrls($"http://+:{ListenPorts.Main}", $"http://+:{ListenPorts.Webhooks}", $"http://+:{llmPort}");
 
         // Exponer la instancia sin AccessToken aborta aquí, antes de construir el host (Kestrel no arranca).
         AccessOptionsValidator.EnsureValid(builder.Configuration);
@@ -67,17 +72,32 @@ internal static class ServeMode
                 {
                     sandbox.DockerEndpoint = configuration[DockerHostKey];
                 }
+
+                var allowedHostsSection = configuration.GetSection(SandboxSectionName + ":AllowedNuGetHosts");
+                if (allowedHostsSection.Exists())
+                {
+                    sandbox.AllowedNuGetHosts = ReadConfiguredHosts(allowedHostsSection);
+                }
             });
         builder.Services.Configure<InstanceLimits>(builder.Configuration.GetSection(LimitsInstanceOptions.SectionName));
         builder.Services.Configure<InstanceOptions>(builder.Configuration.GetSection(InstanceOptions.SectionName));
 
-        // Agents no lee el entorno: Host resuelve Proveedor, URL, key y modelo de cada rol. Si la configuración no es
-        // coherente, Analyst queda nulo y StartupReconciler publica Diagnostic con el motivo (no se procesa nada).
+        // Agents y el Egress Gateway no leen el entorno: Host resuelve Proveedor, URL, key y modelo de cada rol. Si la
+        // configuración no es coherente, quedan nulos y StartupReconciler publica Diagnostic con el motivo.
         builder.Services.AddOptions<AgentsOptions>()
             .Configure<IOptions<InstanceOptions>>((agents, instance) =>
             {
                 agents.SchemaRetries = instance.Value.Agents?.SchemaRetries ?? AgentsOptions.DefaultSchemaRetries;
                 agents.Analyst = AgentEndpointResolver.ResolveAnalyst(instance.Value).Endpoint;
+                agents.Coder = AgentEndpointResolver.ResolveCoder(instance.Value).Endpoint;
+            });
+        builder.Services.AddOptions<SandboxOptions>()
+            .PostConfigure<IOptions<InstanceOptions>>((sandbox, instance) =>
+            {
+                if (AgentEndpointResolver.ResolveCoder(instance.Value).Endpoint is { } coder)
+                {
+                    sandbox.Coder = new SandboxCoderEndpoint(coder.Provider, coder.BaseUrl, coder.ApiKey, coder.Model);
+                }
             });
 
         // Redacción (AD-13): un único ISecretRedactor, aplicado en el sumidero de logs y en /api.
@@ -101,7 +121,7 @@ internal static class ServeMode
         // Resuelto antes de arrancar: si el arranque falla, el contenedor ya estará liberado.
         var redactor = app.Services.GetRequiredService<ISecretRedactor>();
 
-        // :5001 solo /webhooks/*; :5000 nunca /webhooks/* (por LocalPort, no por la cabecera Host).
+        // :5001 solo /webhooks/*; :8080 solo /llm/*; :5000 ni /webhooks/* ni /llm/* (por LocalPort, no por Host).
         app.UseMiddleware<WebhookPortGuardMiddleware>();
 
         app.UseMiddleware<ApiRedactionMiddleware>();
@@ -114,6 +134,7 @@ internal static class ServeMode
 
         app.MapGetHealth();
         app.MapReceiveWebhook();
+        app.MapLlmGateway();
         app.MapSubmitManualEvent();
         app.MapGetEvent();
         app.MapGetRun();
@@ -140,5 +161,36 @@ internal static class ServeMode
             await Console.Error.WriteLineAsync(redactor.Redact($"CodeNetix no ha podido arrancar: {ex.Message}"));
             return CodeNetixCommandLine.ExitFailure;
         }
+    }
+
+    private static List<string> ReadConfiguredHosts(IConfigurationSection section)
+    {
+        var result = new List<string>();
+        if (!string.IsNullOrWhiteSpace(section.Value))
+        {
+            foreach (var part in section.Value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!result.Contains(part, StringComparer.OrdinalIgnoreCase))
+                {
+                    result.Add(part);
+                }
+            }
+
+            return result;
+        }
+
+        foreach (var child in section.GetChildren())
+        {
+            if (!string.IsNullOrWhiteSpace(child.Value))
+            {
+                var trimmed = child.Value.Trim();
+                if (!result.Contains(trimmed, StringComparer.OrdinalIgnoreCase))
+                {
+                    result.Add(trimmed);
+                }
+            }
+        }
+
+        return result;
     }
 }

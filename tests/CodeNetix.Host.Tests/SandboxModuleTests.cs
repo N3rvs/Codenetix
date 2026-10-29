@@ -6,19 +6,22 @@ using CodeNetix.Contracts;
 using CodeNetix.GitHub;
 using CodeNetix.Sandbox;
 using CodeNetix.Sandbox.Docker;
+using CodeNetix.Sandbox.Gateway;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CodeNetix.Host.Tests;
 
 /// <summary>
-/// Historia 2.1 sin Docker: el cliente, el gestor y la sesión contra un motor falso (<see cref="FakeDockerEngine"/>):
-/// forma de las peticiones (etiquetas, límites, sin binds, red <c>none</c>, orden archive → start), demultiplexado,
-/// recorte de la salida, fallos y liberación; más <c>ExportTreeAsync</c> del módulo GitHub.
+/// Historias 2.1 y 2.2 sin Docker: el cliente, el gestor y la sesión contra un motor falso (<see cref="FakeDockerEngine"/>):
+/// forma de las peticiones (etiquetas, límites, sin binds, red <c>codenetix-sandbox</c> con <c>Internal: true</c>,
+/// variables de entorno del Egress Gateway, orden archive → start), demultiplexado, recorte de la salida, fallos y
+/// liberación; más <c>ExportTreeAsync</c> del módulo GitHub.
 /// </summary>
 public sealed class SandboxModuleTests : IAsyncLifetime
 {
     private const string Token = "ghp_testtoken0123456789abcdefghijklmn";
+    private const string ProviderKey = "sk-ant-realproviderkey0123456789abcdef";
     private const string Owner = "sbxunit";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "codenetix-tests-" + Guid.NewGuid().ToString("N"));
@@ -95,9 +98,17 @@ public sealed class SandboxModuleTests : IAsyncLifetime
     [Fact]
     public async Task Create_sends_labels_limits_named_volumes_no_binds_and_network_none_and_uploads_before_start()
     {
-        var (manager, runId) = await PrepareRunAsync(new SandboxOptions { Cpus = 1.5, MemoryMb = 2048, PidsLimit = 256 });
+        var gateway = new SandboxGatewayRegistry();
+        var options = new SandboxOptions
+        {
+            Cpus = 1.5,
+            MemoryMb = 2048,
+            PidsLimit = 256,
+            Coder = new SandboxCoderEndpoint("Anthropic", "https://api.anthropic.com", ProviderKey, "claude-sonnet-4-5"),
+        };
+        var (manager, runId) = await PrepareRunAsync(options, gateway);
 
-        await using var session = await manager.CreateForRunAsync(runId, Ct);
+        var session = await manager.CreateForRunAsync(runId, Ct);
 
         Assert.Equal(FakeDockerEngine.ContainerId, session.ContainerId);
         Assert.Equal(SandboxOptions.DefaultImage, session.Image);
@@ -108,24 +119,35 @@ public sealed class SandboxModuleTests : IAsyncLifetime
         Assert.Equal(
             [
                 "POST /volumes/create",
+                "GET /networks/codenetix-sandbox",
+                "POST /networks/create",
+                "GET /networks/codenetix-sandbox",
                 $"GET /containers/{name}/json",
                 $"DELETE /volumes/{ws}",
                 "POST /volumes/create",
                 "POST /containers/create",
                 $"PUT /containers/{FakeDockerEngine.ContainerId}/archive",
                 $"POST /containers/{FakeDockerEngine.ContainerId}/start",
+                $"GET /containers/{FakeDockerEngine.ContainerId}/json",
             ],
             routes);
 
+        // Red aislada codenetix-sandbox con Internal: true.
+        var netCreate = requests[2].Json;
+        Assert.Equal(SandboxOptions.DefaultNetworkName, netCreate.GetProperty("Name").GetString());
+        Assert.Equal("bridge", netCreate.GetProperty("Driver").GetString());
+        Assert.True(netCreate.GetProperty("Internal").GetBoolean());
+        Assert.Equal("true", netCreate.GetProperty("Labels").GetProperty("codenetix.managed").GetString());
+
         // Volúmenes: codenetix-tools y el de trabajo con las etiquetas.
         Assert.Equal(SandboxManager.ToolsVolume, requests[0].Json.GetProperty("Name").GetString());
-        var volume = requests[3].Json;
+        var volume = requests[6].Json;
         Assert.Equal(ws, volume.GetProperty("Name").GetString());
         Assert.Equal(runId.ToString("D"), volume.GetProperty("Labels").GetProperty("codenetix.run").GetString());
         Assert.Equal("true", volume.GetProperty("Labels").GetProperty("codenetix.managed").GetString());
 
         // Contenedor.
-        var create = requests[4];
+        var create = requests[7];
         Assert.Equal("?name=" + name, create.Query);
         Assert.Matches("^codenetix-sbx-[0-9a-f]{8}$", name);
         var body = create.Json;
@@ -133,14 +155,42 @@ public sealed class SandboxModuleTests : IAsyncLifetime
         Assert.Equal(["sleep", "infinity"], body.GetProperty("Cmd").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal("1000:1000", body.GetProperty("User").GetString());
         Assert.Equal("/workspace", body.GetProperty("WorkingDir").GetString());
-        Assert.Contains("HOME=/tmp/home", body.GetProperty("Env").EnumerateArray().Select(e => e.GetString()));
-        Assert.Contains("NUGET_PACKAGES=/tmp/nuget", body.GetProperty("Env").EnumerateArray().Select(e => e.GetString()));
-        Assert.DoesNotContain(body.GetProperty("Env").EnumerateArray(), e => e.GetString()!.Contains(Token, StringComparison.Ordinal));
+        Assert.False(body.GetProperty("NetworkDisabled").GetBoolean());
+
+        var env = body.GetProperty("Env").EnumerateArray().Select(e => e.GetString()!).ToList();
+        Assert.Contains("HOME=/tmp/home", env);
+        Assert.Contains("NUGET_PACKAGES=/tmp/nuget", env);
+        Assert.Contains("ANTHROPIC_BASE_URL=http://gateway:8080/llm", env);
+        Assert.Contains("HTTP_PROXY=http://gateway:8081", env);
+        Assert.Contains("HTTPS_PROXY=http://gateway:8081", env);
+        Assert.Contains("http_proxy=http://gateway:8081", env);
+        Assert.Contains("https_proxy=http://gateway:8081", env);
+        Assert.Contains("NO_PROXY=gateway,localhost,127.0.0.1", env);
+        Assert.Contains("no_proxy=gateway,localhost,127.0.0.1", env);
+        Assert.Contains("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", env);
+        Assert.Contains("DISABLE_TELEMETRY=1", env);
+        Assert.Contains("DISABLE_ERROR_REPORTING=1", env);
+        Assert.Contains("DO_NOT_TRACK=1", env);
+
+        var apiKeyLine = Assert.Single(env, e => e.StartsWith("ANTHROPIC_API_KEY=", StringComparison.Ordinal));
+        var syntheticToken = apiKeyLine["ANTHROPIC_API_KEY=".Length..];
+        Assert.Matches($"^cnx-run-{runId:D}-[0-9a-f]{{32}}$", syntheticToken);
+        Assert.DoesNotContain(env, e => e.Contains(Token, StringComparison.Ordinal));
+        Assert.DoesNotContain(env, e => e.Contains(ProviderKey, StringComparison.Ordinal));
+
+        // Token registrado en el Gateway con la IP del contenedor y revocado al cerrar la sesión.
+        var registered = gateway.TryAuthenticate(syntheticToken);
+        Assert.NotNull(registered);
+        Assert.Equal(runId, registered.RunId);
+        Assert.Equal("172.28.0.2", registered.ContainerIp);
+        Assert.Equal(runId, gateway.ResolveRunId(null, "172.28.0.2"));
+
         Assert.Equal(runId.ToString("D"), body.GetProperty("Labels").GetProperty("codenetix.run").GetString());
         Assert.Equal("true", body.GetProperty("Labels").GetProperty("codenetix.managed").GetString());
 
         var host = body.GetProperty("HostConfig");
-        Assert.Equal("none", host.GetProperty("NetworkMode").GetString());
+        Assert.Equal("codenetix-sandbox", host.GetProperty("NetworkMode").GetString());
+        Assert.Equal(["gateway:172.28.0.1"], host.GetProperty("ExtraHosts").EnumerateArray().Select(e => e.GetString()));
         Assert.False(host.GetProperty("Privileged").GetBoolean());
         Assert.Equal(0, host.GetProperty("Binds").GetArrayLength());
         Assert.Equal(1_500_000_000L, host.GetProperty("NanoCpus").GetInt64());
@@ -158,7 +208,7 @@ public sealed class SandboxModuleTests : IAsyncLifetime
             mounts.Select(m => (m.GetProperty("Source").GetString(), m.GetProperty("Target").GetString(), m.GetProperty("ReadOnly").GetBoolean())));
 
         // El tar: los archivos del BaseSha, de sandbox (1000:1000) y sin .git ni la cabecera global de git archive.
-        var archive = requests[5];
+        var archive = requests[8];
         Assert.Contains("path=%2Fworkspace", archive.Query, StringComparison.Ordinal);
         var entries = ReadTar(archive.Body);
         Assert.Contains("README.md", entries.Keys);
@@ -167,13 +217,47 @@ public sealed class SandboxModuleTests : IAsyncLifetime
         Assert.DoesNotContain(entries.Keys, k => k.Split('/').Contains(".git"));
         Assert.All(entries.Values, e => Assert.Equal((1000, 1000), (e.Uid, e.Gid)));
         Assert.DoesNotContain(entries.Values, e => e.Type == TarEntryType.GlobalExtendedAttributes);
+
+        await session.DisposeAsync();
+        Assert.Null(gateway.TryAuthenticate(syntheticToken));
+    }
+
+    [Fact]
+    public async Task Host_container_is_connected_to_the_sandbox_network_with_gateway_alias()
+    {
+        var (manager, runId) = await PrepareRunAsync(new SandboxOptions { HostContainer = "codenetix-host" });
+
+        await using var session = await manager.CreateForRunAsync(runId, Ct);
+
+        var connect = Assert.Single(_engine.Requests, r => r.Route == "/networks/codenetix-sandbox/connect");
+        Assert.Equal("codenetix-host", connect.Json.GetProperty("Container").GetString());
+        Assert.Equal(
+            ["gateway"],
+            connect.Json.GetProperty("EndpointConfig").GetProperty("Aliases").EnumerateArray().Select(e => e.GetString()));
+
+        var create = Assert.Single(_engine.Requests, r => r.Route == "/containers/create");
+        Assert.Equal(0, create.Json.GetProperty("HostConfig").GetProperty("ExtraHosts").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Non_internal_existing_network_is_rejected_before_creating_the_container()
+    {
+        _engine.NetworkExists = true;
+        _engine.NetworkInternal = false;
+        var (manager, runId) = await PrepareRunAsync();
+
+        var ex = await Assert.ThrowsAsync<SandboxCreationException>(() => manager.CreateForRunAsync(runId, Ct));
+
+        Assert.Contains("Internal=false", ex.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(_engine.Requests, r => r.Route == "/containers/create");
     }
 
     [Fact]
     public async Task Missing_image_fails_with_a_hint_and_removes_the_half_created_volume()
     {
         _engine.CreateContainerError = (404, "No such image: codenetix-sandbox:latest");
-        var (manager, runId) = await PrepareRunAsync();
+        var gateway = new SandboxGatewayRegistry();
+        var (manager, runId) = await PrepareRunAsync(gateway: gateway);
 
         var ex = await Assert.ThrowsAsync<SandboxCreationException>(() => manager.CreateForRunAsync(runId, Ct));
 
@@ -181,6 +265,7 @@ public sealed class SandboxModuleTests : IAsyncLifetime
         var routes = _engine.Requests.Select(r => $"{r.Method} {r.Route}").ToList();
         Assert.Equal($"DELETE /volumes/{SandboxManager.VolumeNameOf(runId)}", routes[^1]);
         Assert.DoesNotContain(routes, r => r.StartsWith("DELETE /containers/", StringComparison.Ordinal) || r.EndsWith("/start", StringComparison.Ordinal));
+        Assert.Null(gateway.ResolveRunId(null, null));
     }
 
     [Fact]
@@ -456,6 +541,7 @@ public sealed class SandboxModuleTests : IAsyncLifetime
             ],
             routes);
         Assert.DoesNotContain(_engine.Requests, r => r.Method == "DELETE" && r.Route.Contains(SandboxManager.ToolsVolume, StringComparison.Ordinal));
+        Assert.DoesNotContain(_engine.Requests, r => r.Method == "DELETE" && r.Route.Contains(SandboxOptions.DefaultNetworkName, StringComparison.Ordinal));
         await Assert.ThrowsAsync<SandboxUnavailableException>(() => session.ExecAsync(new SandboxCommand("true"), Ct));
     }
 
@@ -476,7 +562,8 @@ public sealed class SandboxModuleTests : IAsyncLifetime
     [Fact]
     public async Task Cancelling_the_run_token_stops_the_container()
     {
-        var (manager, runId) = await PrepareRunAsync();
+        var gateway = new SandboxGatewayRegistry();
+        var (manager, runId) = await PrepareRunAsync(gateway: gateway);
         using var run = new CancellationTokenSource();
         await using var session = await manager.CreateForRunAsync(runId, run.Token);
 
@@ -484,6 +571,7 @@ public sealed class SandboxModuleTests : IAsyncLifetime
         await session.StopAsync(); // la misma parada que ha disparado la cancelación
 
         Assert.Single(_engine.Requests, r => r.Route.EndsWith("/stop", StringComparison.Ordinal) && r.Query == "?t=10");
+        Assert.Null(gateway.ResolveRunId(null, null));
         await Assert.ThrowsAsync<SandboxUnavailableException>(() => session.ExecAsync(new SandboxCommand("true"), Ct));
     }
 
@@ -533,7 +621,7 @@ public sealed class SandboxModuleTests : IAsyncLifetime
     [Fact]
     public async Task ExportTree_writes_only_the_versioned_files_of_the_base_sha_without_git()
     {
-        var (_, runId, workspace) = await PrepareRunCoreAsync(new SandboxOptions());
+        var (_, runId, workspace) = await PrepareRunCoreAsync(new SandboxOptions(), null);
 
         // Un archivo sin versionar en el árbol de trabajo no viaja.
         File.WriteAllText(Path.Combine(workspace.WorkspacePathOf(runId), "local.txt"), "no");
@@ -582,13 +670,13 @@ public sealed class SandboxModuleTests : IAsyncLifetime
             Options.Create(new GitHubOptions { Token = Token, CloneBaseUrl = _repos.BaseUrl, WorkspacesDirectory = Path.Combine(_root, "workspaces") }),
             NullLogger<RepositoryWorkspace>.Instance);
 
-    private async Task<(SandboxManager Manager, Guid RunId)> PrepareRunAsync(SandboxOptions? options = null)
+    private async Task<(SandboxManager Manager, Guid RunId)> PrepareRunAsync(SandboxOptions? options = null, ISandboxGateway? gateway = null)
     {
-        var (manager, runId, _) = await PrepareRunCoreAsync(options ?? new SandboxOptions());
+        var (manager, runId, _) = await PrepareRunCoreAsync(options ?? new SandboxOptions(), gateway);
         return (manager, runId);
     }
 
-    private async Task<(SandboxManager Manager, Guid RunId, RepositoryWorkspace Workspace)> PrepareRunCoreAsync(SandboxOptions options)
+    private async Task<(SandboxManager Manager, Guid RunId, RepositoryWorkspace Workspace)> PrepareRunCoreAsync(SandboxOptions options, ISandboxGateway? gateway)
     {
         var repo = "r" + Guid.NewGuid().ToString("N")[..8];
         _repos.Create(Owner, repo, new Dictionary<string, string>
@@ -599,7 +687,7 @@ public sealed class SandboxModuleTests : IAsyncLifetime
         var workspace = CreateWorkspace();
         var runId = Guid.CreateVersion7();
         await workspace.PrepareAsync(runId, Owner, repo, Ct);
-        return (new SandboxManager(_docker, workspace, Options.Create(options), NullLoggerFactory.Instance), runId, workspace);
+        return (new SandboxManager(_docker, workspace, Options.Create(options), NullLoggerFactory.Instance, gateway), runId, workspace);
     }
 
     private static Dictionary<string, TarInfo> ReadTar(byte[] bytes)

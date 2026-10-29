@@ -43,3 +43,4 @@ Ejecutar el trabajo de programación y verificación dentro de un entorno efíme
 - **2.3 → 2.4:** la 2.4 envuelve la llamada al Programador en el bucle de intentos con `ITestRunner` (ejecución base al crear el Sandbox + validación de compilación, tests en verde y al menos un test nuevo tras cada intento).
 - **2.1 + 2.2 + 2.4 → 2.5:** la prueba de fuego de seguridad (2.5) ejercita de extremo a punta el Sandbox, el Gateway y `ITestRunner` con un test malicioso dentro del repositorio objetivo.
 - **Con la Épica 5 (AD-15):** el registro de `usage` que captura el Gateway en `:8080/llm` en la 2.2 se conectará con `IBudgetLedger.Charge` y el corte `402 codenetix:budget_exhausted` en las historias 5.1 y 5.2.
+
