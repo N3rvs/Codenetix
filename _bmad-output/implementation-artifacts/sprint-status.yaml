@@ -29,7 +29,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 # - Retrospective appends its action items to action_items; the status view surfaces open ones
 generated: 10-27-2026 12:00
-last_updated: 11-21-2026 21:14
+last_updated: 11-21-2026 22:07
 project: Codenetix
 project_key: NOKEY
 tracking_system: file-system
@@ -59,7 +59,7 @@ development_status:
   3-1-revisores-independientes-emiten-veredictos: done
   3-2-rondas-de-revisión: done
   3-3-pr-con-traza-completa: done
-  3-4-clasificación-de-riesgo-determinista: backlog
+  3-4-clasificación-de-riesgo-determinista: done
   3-5-aviso-en-la-issue-al-terminar: backlog
   epic-3-retrospective: optional
 

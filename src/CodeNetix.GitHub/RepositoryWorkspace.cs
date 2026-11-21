@@ -174,7 +174,7 @@ internal sealed partial class RepositoryWorkspace : IRepositoryWorkspace
             await RunCheckedAsync(path, ["add", "-N", "--all"], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
 
             var diff = await RunCheckedAsync(path, ["diff", "--no-ext-diff", normalizedBaseSha], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
-            var changedRaw = await RunCheckedAsync(path, ["diff", "--no-ext-diff", "--name-only", "-z", normalizedBaseSha], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
+            var changedRaw = await RunCheckedAsync(path, ["diff", "--no-ext-diff", "--no-renames", "--name-only", "-z", normalizedBaseSha], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
             var changedFiles = changedRaw.Split('\0', StringSplitOptions.RemoveEmptyEntries);
 
             return new DiffResult(diff, [.. changedFiles]);

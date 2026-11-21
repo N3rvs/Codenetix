@@ -3,6 +3,7 @@ using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Domain;
 using CodeNetix.Pipeline.Events;
+using CodeNetix.Pipeline.Features.DecideMerge;
 using CodeNetix.Pipeline.Features.ResolveConfig;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -503,11 +504,13 @@ internal sealed partial class RunOrchestrator(
                 return;
             }
 
-            var roundVerdicts = await ReviewAsync(context, run, sandbox, spec, passedReport, config, round, cancellationToken).ConfigureAwait(false);
-            if (roundVerdicts is null)
+            var reviewOutcome = await ReviewAsync(context, run, sandbox, spec, passedReport, config, round, cancellationToken).ConfigureAwait(false);
+            if (reviewOutcome is null)
             {
                 return;
             }
+
+            var (roundDiff, roundVerdicts) = reviewOutcome.Value;
 
             // 1. Precedencia máxima: cualquier Rejected termina inmediatamente en Failed(ReviewRejected).
             var rejections = roundVerdicts
@@ -524,10 +527,10 @@ internal sealed partial class RunOrchestrator(
                 return;
             }
 
-            // 2. Unanimidad Approved → Deciding → crear commit único, push y abrir PR (FR-17, AD-8).
+            // 2. Unanimidad Approved → Deciding → clasificar riesgo (AD-9, FR-18), crear commit único, push y abrir PR (FR-17, AD-8).
             if (roundVerdicts.Count > 0 && roundVerdicts.All(v => v.Verdict.Decision == VerdictDecision.Approved))
             {
-                await PublishPullRequestAsync(context, run, owner, repo, number, spec, passedReport, round, cancellationToken).ConfigureAwait(false);
+                await PublishPullRequestAsync(context, run, owner, repo, number, spec, passedReport, config, roundDiff, roundVerdicts, round, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -565,7 +568,7 @@ internal sealed partial class RunOrchestrator(
     /// Revisores en paralelo. Persiste <c>run_verdicts</c> y emite <see cref="VerdictRecorded"/>. Devuelve los
     /// Veredictos ya redactados de la ronda, o <c>null</c> si falló antes de revisar.
     /// </summary>
-    private async Task<IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)>?> ReviewAsync(
+    private async Task<(DiffResult Diff, IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)> Verdicts)?> ReviewAsync(
         PipelineDbContext context,
         PipelineRun run,
         ISandboxSession sandbox,
@@ -673,7 +676,7 @@ internal sealed partial class RunOrchestrator(
         }
 
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        return roundVerdicts;
+        return (diff, roundVerdicts);
     }
 
     private async Task<(ReviewResult Result, DateTimeOffset CompletedAt)> RunReviewerSafeAsync(ReviewInput input, CancellationToken cancellationToken)
@@ -859,9 +862,10 @@ internal sealed partial class RunOrchestrator(
         string.Join(' ', value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     /// <summary>
-    /// AD-16 paso 6 (FR-17, AD-8): transiciona <c>Reviewing → Deciding</c>, construye el cuerpo trazable redactado,
-    /// publica el PR vía <see cref="IPullRequestPublisher"/>, emite <see cref="PullRequestOpened"/> y transiciona
-    /// <c>Deciding → PullRequestCreated</c>. Ante error, transiciona <c>Deciding → Failed(StageError)</c>.
+    /// AD-16 paso 6 (FR-17, FR-18, AD-8, AD-9): transiciona <c>Reviewing → Deciding</c>, clasifica el riesgo de forma
+    /// determinista con <see cref="MergePolicy.Classify"/> y emite <see cref="RiskClassified"/>, construye el cuerpo
+    /// trazable redactado, publica el PR vía <see cref="IPullRequestPublisher"/>, emite <see cref="PullRequestOpened"/>
+    /// y transiciona <c>Deciding → PullRequestCreated</c>. Ante error, transiciona <c>Deciding → Failed(StageError)</c>.
     /// </summary>
     private async Task PublishPullRequestAsync(
         PipelineDbContext context,
@@ -871,6 +875,9 @@ internal sealed partial class RunOrchestrator(
         long issueNumber,
         Spec spec,
         TestReport testReport,
+        EffectiveConfig config,
+        DiffResult diff,
+        IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)> roundVerdicts,
         int round,
         CancellationToken cancellationToken)
     {
@@ -892,6 +899,24 @@ internal sealed partial class RunOrchestrator(
             StartedAt = decisionStartedAt,
         };
         context.Stages.Add(decisionStage);
+
+        var protectedPaths = config.ProtectedPaths.IsDefault
+            ? EffectiveConfig.DefaultProtectedPaths
+            : config.ProtectedPaths;
+        var diffLines = MergePolicy.CountDiffLines(diff.UnifiedDiff);
+        var policyResult = MergePolicy.Classify(new PolicyInput(
+            diff.ChangedFiles,
+            diffLines,
+            protectedPaths,
+            roundVerdicts.Select(static v => v.Verdict.Decision).ToArray(),
+            round));
+
+        await log.AddAsync(
+            context,
+            run.Id,
+            new RiskClassified(policyResult.RiskClass, diffLines, policyResult.MatchedProtectedPaths),
+            cancellationToken,
+            stageId: decisionStage.Id).ConfigureAwait(false);
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
         var verdictRecords = await context.Verdicts
@@ -915,7 +940,7 @@ internal sealed partial class RunOrchestrator(
                 r.CreatedAt))
             .ToArray();
 
-        var title = PullRequestBodyBuilder.BuildTitle(issueNumber, spec.Problem, log.Redactor);
+        var title = PullRequestBodyBuilder.BuildTitle(issueNumber, spec.Problem, log.Redactor, policyResult);
         var commitMessage = PullRequestBodyBuilder.BuildCommitMessage(run.Id, issueNumber, spec.Problem, log.Redactor);
         var body = PullRequestBodyBuilder.BuildBody(
             run.Id,
@@ -927,7 +952,8 @@ internal sealed partial class RunOrchestrator(
             verdicts,
             testReport,
             log.Redactor,
-            costUsd: null);
+            costUsd: null,
+            policy: policyResult);
 
         var request = new PullRequestRequest(run.Id, owner, repo, run.BaseSha, title, body, commitMessage);
 

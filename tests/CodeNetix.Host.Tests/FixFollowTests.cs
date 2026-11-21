@@ -131,6 +131,34 @@ public sealed class FixFollowTests : IDisposable
     }
 
     [Fact]
+    public async Task Follow_formats_RiskClassified_with_protected_paths()
+    {
+        await using var api = await FollowApi.StartAsync();
+        var runId = api.RunId;
+        api.RunEvents.AddRange(
+        [
+            new { type = "RunCreated", eventId = api.EventId, objectKey = "github:o/r#12", seq = 1, runId },
+            new { type = "StateChanged", from = "Reviewing", to = "Deciding", seq = 2, runId },
+            new
+            {
+                type = "RiskClassified",
+                riskClass = "NeedsAttention",
+                diffLines = 420,
+                matchedProtectedPaths = new[] { "src/App/App.csproj", "src/Security/Auth.cs" },
+                seq = 3,
+                runId,
+            },
+            new { type = "StateChanged", from = "Deciding", to = "PullRequestCreated", seq = 4, runId },
+        ]);
+
+        var exitCode = await RunAsync([IssueUrl, "--follow"], Config(api.BaseUrl));
+
+        Assert.Equal(CodeNetixCommandLine.ExitOk, exitCode);
+        Assert.Contains("[3] RiskClassified NeedsAttention (420 líneas, 2 ruta(s) protegida(s))", StdoutLines);
+        Assert.Empty(_stderr.ToString());
+    }
+
+    [Fact]
     public async Task Follow_exits_1_on_Cancelled()
     {
         await using var api = await FollowApi.StartAsync();
@@ -222,7 +250,7 @@ public sealed class FixFollowTests : IDisposable
         Assert.Matches(new Regex("^Evento [0-9a-f-]{36} registrado\\.$"), lines[0]);
         Assert.Matches(new Regex("^Ejecución [0-9a-f-]{36}:$"), lines[1]);
         var events = lines.Skip(2).ToList();
-        Assert.Equal(16, events.Count);
+        Assert.Equal(17, events.Count);
         Assert.Equal("[1] RunCreated github:o/r#12", events[0]);
         Assert.Equal("[2] StateChanged → Received", events[1]);
         Assert.Matches(new Regex("^\\[3\\] RepositoryPrepared [0-9a-f]{40}$"), events[2]);
@@ -237,8 +265,9 @@ public sealed class FixFollowTests : IDisposable
         Assert.Equal("[12] VerdictRecorded ronda 1 quality → approved (0 hallazgo(s))", events[11]);
         Assert.Equal("[13] VerdictRecorded ronda 1 tests → approved (0 hallazgo(s))", events[12]);
         Assert.Equal("[14] StateChanged Reviewing → Deciding", events[13]);
-        Assert.Matches(new Regex("^\\[15\\] PullRequestOpened #\\d+ https://github\\.com/o/r/pull/\\d+$"), events[14]);
-        Assert.Equal("[16] StateChanged Deciding → PullRequestCreated", events[15]);
+        Assert.Matches(new Regex("^\\[15\\] RiskClassified Minor \\(\\d+ líneas\\)$"), events[14]);
+        Assert.Matches(new Regex("^\\[16\\] PullRequestOpened #\\d+ https://github\\.com/o/r/pull/\\d+$"), events[15]);
+        Assert.Equal("[17] StateChanged Deciding → PullRequestCreated", events[16]);
         Assert.Empty(_stderr.ToString());
     }
 

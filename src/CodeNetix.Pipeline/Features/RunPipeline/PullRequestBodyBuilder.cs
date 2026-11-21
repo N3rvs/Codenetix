@@ -12,14 +12,22 @@ internal static class PullRequestBodyBuilder
 {
     private const int MaxTitleLength = 200;
     private const int MaxNewTestsListed = 50;
+    private const int MaxProtectedPathsListed = 50;
 
-    public static string BuildTitle(long issueNumber, string issueTitle, ISecretRedactor redactor)
+    public const string NeedsAttentionTitlePrefix = "[Requiere atención] ";
+
+    public static string BuildTitle(long issueNumber, string issueTitle, ISecretRedactor redactor, PolicyResult? policy = null)
     {
         ArgumentNullException.ThrowIfNull(redactor);
         var cleanIssueTitle = CollapseSingleLine(issueTitle);
         var raw = string.IsNullOrEmpty(cleanIssueTitle)
             ? string.Create(CultureInfo.InvariantCulture, $"fix: resolver #{issueNumber}")
             : string.Create(CultureInfo.InvariantCulture, $"fix(#{issueNumber}): {cleanIssueTitle}");
+        if (policy?.RiskClass == RiskClass.NeedsAttention)
+        {
+            raw = NeedsAttentionTitlePrefix + raw;
+        }
+
         return TextLimits.Truncate(redactor.Redact(raw), MaxTitleLength);
     }
 
@@ -43,7 +51,8 @@ internal static class PullRequestBodyBuilder
         IReadOnlyList<RunVerdict> verdicts,
         TestReport testReport,
         ISecretRedactor redactor,
-        decimal? costUsd = null)
+        decimal? costUsd = null,
+        PolicyResult? policy = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         ArgumentNullException.ThrowIfNull(verdicts);
@@ -130,7 +139,47 @@ internal static class PullRequestBodyBuilder
 
         sb.AppendLine();
 
-        // 5. Coste
+        // 5. Clasificación de riesgo (FR-18)
+        if (policy is not null)
+        {
+            sb.AppendLine("## Clasificación de riesgo");
+            sb.AppendLine($"- Clasificación: {InlineCode(policy.RiskClass.ToString())}");
+            if (policy.RiskClass == RiskClass.NeedsAttention)
+            {
+                if (policy.Reasons is { Count: > 0 })
+                {
+                    sb.AppendLine("- Motivos:");
+                    foreach (var reason in policy.Reasons)
+                    {
+                        sb.AppendLine($"  - {CollapseSingleLine(reason)}");
+                    }
+                }
+
+                if (policy.MatchedProtectedPaths is { Count: > 0 })
+                {
+                    sb.AppendLine("- Rutas protegidas implicadas:");
+                    foreach (var path in policy.MatchedProtectedPaths.Take(MaxProtectedPathsListed))
+                    {
+                        sb.AppendLine($"  - {InlineCode(CollapseSingleLine(path))}");
+                    }
+
+                    if (policy.MatchedProtectedPaths.Count > MaxProtectedPathsListed)
+                    {
+                        sb.AppendLine(string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"  - … y {policy.MatchedProtectedPaths.Count - MaxProtectedPathsListed} ruta(s) más"));
+                    }
+                }
+            }
+            else if (policy.RiskClass == RiskClass.Minor)
+            {
+                sb.AppendLine("- Cambio menor: sin rutas protegidas, dentro del umbral de diff y aprobado por unanimidad en la ronda 1.");
+            }
+
+            sb.AppendLine();
+        }
+
+        // 6. Coste
         sb.AppendLine("## Coste");
         if (costUsd.HasValue)
         {
