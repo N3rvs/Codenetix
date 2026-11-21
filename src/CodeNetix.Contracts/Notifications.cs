@@ -8,6 +8,15 @@ public enum NotificationKind
 {
     /// <summary>Rechazo temprano (FR-10): la issue no es automatizable.</summary>
     NotAutomatable,
+
+    /// <summary>Cierre con éxito (FR-19): se ha abierto un Pull Request para la issue.</summary>
+    PullRequestCreated,
+
+    /// <summary>Cierre en error (FR-19): la Ejecución ha terminado en <see cref="RunState.Failed"/> (motivo distinto de <see cref="FailureReason.NotAutomatable"/>).</summary>
+    RunFailed,
+
+    /// <summary>Cierre por cancelación (FR-19): la Ejecución ha terminado en <see cref="RunState.Cancelled"/>.</summary>
+    RunCancelled,
 }
 
 /// <summary>Estado de un aviso en <c>gh_notifications</c>.</summary>

@@ -135,7 +135,10 @@ internal sealed partial class IssueNotifier(
                 return await MarkPostedAsync(context, record, existing, cancellationToken).ConfigureAwait(false);
             }
 
-            var text = IssueCommentSanitizer.Sanitize(body, MaxBodyLength) + "\n\n" + marker;
+            var sanitized = kind == NotificationKind.PullRequestCreated
+                ? IssueCommentSanitizer.SanitizeAllowingPullRequestLinks(body, MaxBodyLength, owner, repo)
+                : IssueCommentSanitizer.Sanitize(body, MaxBodyLength);
+            var text = sanitized + "\n\n" + marker;
             var response = await client.PostAsync(issuePath + "/comments", new { body = text }, cancellationToken).ConfigureAwait(false);
             if (response.Status != HttpStatusCode.Created)
             {

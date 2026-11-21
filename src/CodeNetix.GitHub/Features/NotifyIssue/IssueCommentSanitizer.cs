@@ -60,6 +60,47 @@ internal static partial class IssueCommentSanitizer
         return TextLimits.Truncate(clean.Trim(), maxLength);
     }
 
+    /// <summary>
+    /// Sanea <paramref name="text"/> con las mismas reglas que <see cref="Sanitize"/> pero preservando enlaces
+    /// Markdown seguros al PR del propio repositorio (<c>[#N](https://github.com/{owner}/{repo}/pull/N)</c>).
+    /// Cualquier HTML, mención o enlace externo sigue eliminándose o neutralizándose.
+    /// </summary>
+    public static string SanitizeAllowingPullRequestLinks(string? text, int maxLength, string owner, string repo)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxLength, 2);
+        ArgumentException.ThrowIfNullOrWhiteSpace(owner);
+        ArgumentException.ThrowIfNullOrWhiteSpace(repo);
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        var escapedOwner = Regex.Escape(Uri.EscapeDataString(owner));
+        var escapedRepo = Regex.Escape(Uri.EscapeDataString(repo));
+        var pattern = $@"\[#(\d+)\]\((https://github\.com/{escapedOwner}/{escapedRepo}/pull/\1)\)";
+        var prLinkRegex = new Regex(pattern, RegexOptions.IgnoreCase, TimeSpan.FromMilliseconds(RegexTimeoutMs));
+
+        var preserved = new List<(string Placeholder, string Link)>();
+        var nonce = Guid.NewGuid().ToString("N");
+        var substituted = prLinkRegex.Replace(text, match =>
+        {
+            var placeholder = $"CODENETIXPRLINK{nonce}{preserved.Count}END";
+            preserved.Add((placeholder, match.Value));
+            return placeholder;
+        });
+
+        var sanitized = Sanitize(substituted, int.MaxValue);
+        if (preserved.Count > 0)
+        {
+            foreach (var (placeholder, link) in preserved)
+            {
+                sanitized = sanitized.Replace(placeholder, link, StringComparison.Ordinal);
+            }
+        }
+
+        return TextLimits.Truncate(sanitized, maxLength);
+    }
+
     private static string WithoutControlCharacters(string text)
     {
         var builder = new StringBuilder(text.Length);

@@ -94,7 +94,7 @@ public sealed class EarlyRejectionTests : IDisposable
     // --- Matriz: Automatizable -------------------------------------------------------------
 
     [Fact]
-    public async Task Automatable_issue_behaves_as_in_1_8_without_comment()
+    public async Task Automatable_issue_completes_without_NotAutomatable_comment()
     {
         await using var factory = CreateFactory();
         using var client = factory.CreateAuthorizedClient();
@@ -105,10 +105,13 @@ public sealed class EarlyRejectionTests : IDisposable
         Assert.Null(run.FailureReason);
         Assert.Null(run.FailureDetail);
         Assert.Equal(JsonValueKind.Object, run.Json.GetProperty("spec").ValueKind);
-        Assert.Equal(0, factory.GitHub!.CommentPosts);
-        Assert.Empty(factory.GitHub.CommentsOn("o", "r", run.Number));
-        Assert.Equal(0L, await ScalarAsync("SELECT COUNT(*) FROM gh_notifications;"));
-        Assert.DoesNotContain(Events(run), e => e.GetProperty("type").GetString() is "AnalysisRejected" or "IssueCommented");
+        Assert.Equal(1, factory.GitHub!.CommentPosts);
+        Assert.Single(factory.GitHub.CommentsOn("o", "r", run.Number));
+        Assert.Equal(1L, await ScalarAsync("SELECT COUNT(*) FROM gh_notifications WHERE kind = 'PullRequestCreated';"));
+        Assert.Equal(0L, await ScalarAsync("SELECT COUNT(*) FROM gh_notifications WHERE kind = 'NotAutomatable';"));
+        Assert.DoesNotContain(Events(run), e => e.GetProperty("type").GetString() == "AnalysisRejected");
+        var commented = Assert.Single(Events(run), e => e.GetProperty("type").GetString() == "IssueCommented");
+        Assert.Equal("PullRequestCreated", commented.GetProperty("kind").GetString());
     }
 
     // --- Matriz: GitHub falla --------------------------------------------------------------
@@ -186,7 +189,7 @@ public sealed class EarlyRejectionTests : IDisposable
     }
 
     [Fact]
-    public async Task Always_invalid_rejection_ends_SchemaInvalid_without_comment()
+    public async Task Always_invalid_rejection_ends_SchemaInvalid_with_RunFailed_comment_not_NotAutomatable()
     {
         await using var factory = CreateFactory();
         const string NoCategory = """{"outcome":"not_automatable","explanation":"x"}""";
@@ -197,7 +200,9 @@ public sealed class EarlyRejectionTests : IDisposable
 
         Assert.Equal("SchemaInvalid", run.FailureReason);
         Assert.Contains("'category'", run.FailureDetail, StringComparison.Ordinal);
-        Assert.Equal(0, factory.GitHub!.CommentPosts);
+        Assert.Equal(1, factory.GitHub!.CommentPosts);
+        Assert.Equal(1L, await ScalarAsync("SELECT COUNT(*) FROM gh_notifications WHERE kind = 'RunFailed';"));
+        Assert.Equal(0L, await ScalarAsync("SELECT COUNT(*) FROM gh_notifications WHERE kind = 'NotAutomatable';"));
     }
 
     // --- Matriz: Doble publicación y caída tras publicar ----------------------------------
@@ -595,9 +600,8 @@ public sealed class EarlyRejectionTests : IDisposable
                 var state = json.GetProperty("state").GetString();
                 var events = json.GetProperty("events").EnumerateArray().Select(e => e.GetProperty("type").GetString()).ToList();
 
-                // Un rechazo termina cuando se ha registrado el resultado del aviso (después del commit del fallo).
-                var settled = json.GetProperty("failureReason").GetString() != "NotAutomatable"
-                    || events.Contains("IssueCommented") || events.Contains("NotificationFailed");
+                // Toda Ejecución de GitHub termina cuando se ha registrado el resultado del aviso (después del commit terminal).
+                var settled = events.Contains("IssueCommented") || events.Contains("NotificationFailed");
 
                 // ...y, si se creó el Sandbox, cuando se ha registrado su liberación (el último paso del orquestador).
                 settled &= !events.Contains("SandboxCreated") || events.Contains("SandboxReleased");
