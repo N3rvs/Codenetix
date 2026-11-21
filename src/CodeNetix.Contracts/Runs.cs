@@ -169,4 +169,7 @@ public interface IRunReader
 
     /// <summary>La <see cref="Spec"/> de la Ejecución (<c>run_specs</c>), o <c>null</c> si todavía no hay.</summary>
     Task<Spec?> GetSpecAsync(Guid runId, CancellationToken cancellationToken);
+
+    /// <summary>El último <see cref="TestReport"/> de la Ejecución (<c>run_test_reports</c>), o <c>null</c> si todavía no hay.</summary>
+    Task<TestReport?> GetTestReportAsync(Guid runId, CancellationToken cancellationToken);
 }

@@ -48,3 +48,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-1-sandbox-efimero-por-ejecucion.md`
   summary: `DOCKER_HOST` `tcp://` con TLS (`DOCKER_TLS_VERIFY`/`DOCKER_CERT_PATH`) no está soportado y se reporta como "Docker no responde".
   evidence: Detectar esas variables y dar un motivo explícito en `Diagnostic` (o soportar TLS de cliente). Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-2-3-el-programador-implementa-la-spec.md`
+  summary: `ClaudeCodeAgent.BuildCommand` todavía no pasa `--max-budget-usd <restante>` al CLI de Claude Code (AD-5, AD-15).
+  evidence: El presupuesto restante depende de `IBudgetLedger`, que se implementa en la Épica 5 (historia 5.2). Añadir la bandera en cuanto exista el libro de presupuesto. Severidad medium.

@@ -1,6 +1,7 @@
 using CodeNetix.Contracts;
 using CodeNetix.Sandbox.Docker;
 using CodeNetix.Sandbox.Gateway;
+using CodeNetix.Sandbox.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
@@ -37,6 +38,7 @@ public static class SandboxServiceCollectionExtensions
         services.AddHostedService(sp => sp.GetRequiredService<NuGetConnectProxy>());
         services.TryAddSingleton<ISandboxManager, SandboxManager>();
         services.TryAddSingleton<ISandboxToolsProvisioner, SandboxToolsProvisioner>();
+        services.TryAddSingleton<ITestRunner, DotnetTestRunner>();
         services.TryAddSingleton<ISandboxHealthCheck, SandboxHealthCheck>();
         return services;
     }

@@ -1,3 +1,4 @@
+using System.Text;
 using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Domain;
@@ -33,7 +34,11 @@ internal interface IRunOrchestrator
 /// <see cref="IssueCommented"/> o <see cref="NotificationFailed"/>;
 /// <c>SchemaInvalid</c> → <c>Failed(SchemaInvalid, último error)</c>; <c>ProviderError</c> →
 /// <c>Failed(StageError, "Proveedor: …")</c> (el detalle se redacta al persistirse).</item>
-/// <item>Puente provisional hasta la Épica 2: tras la Spec, <c>Failed(StageError, <see cref="Detail"/>)</c>.</item>
+/// <item>Paso 4 (<c>Coding</c>): captura la línea base con <see cref="ITestRunner.CaptureBaselineAsync"/>, ejecuta
+/// el Programador (<see cref="ICodingAgent"/>) y valida los cambios con <see cref="ITestRunner.RunAsync"/> reintentando
+/// con feedback hasta <c>EffectiveConfig.MaxCodingAttempts</c>. Al agotarlos, <c>Failed(TestsFailed)</c>.</item>
+/// <item>Puente provisional hasta la Épica 3: tras un <see cref="TestReport"/> aprobado, persiste el informe en
+/// <c>run_test_reports</c> y finaliza en <c>Failed(StageError, <see cref="Detail"/>)</c> ("Revisión no disponible").</item>
 /// </list>
 /// Errores: clon o credenciales → <c>Failed(CloneFailed)</c>; YAML o esquema inválidos →
 /// <c>Failed(InvalidRepoConfig)</c> sin llamar a ningún agente. El árbol de trabajo se borra al terminar
@@ -46,14 +51,15 @@ internal sealed partial class RunOrchestrator(
     IIssueReader issues,
     IAnalyst analyst,
     ICodingAgent coder,
+    ITestRunner testRunner,
     IIssueNotifier notifier,
     IRunEventSink events,
     ISandboxManager sandboxes,
     IOptions<InstanceLimits> limits,
     ILogger<RunOrchestrator> logger) : IRunOrchestrator
 {
-    /// <summary>Detalle del puente provisional tras una Spec válida (hasta que exista el Programador, Épica 2).</summary>
-    public const string Detail = "Pruebas no disponibles";
+    /// <summary>Detalle del puente provisional tras superar los tests (hasta que exista la Revisión, Épica 3).</summary>
+    public const string Detail = "Revisión no disponible";
 
     public const string IssueUnreadablePrefix = "no se pudo leer la issue: ";
 
@@ -61,8 +67,13 @@ internal sealed partial class RunOrchestrator(
 
     public const string SandboxFailedPrefix = "no se pudo crear el Sandbox: ";
 
-    /// <summary>Longitud máxima del detalle de un <c>codenetix.yml</c> inválido.</summary>
+    public const string TestRunnerFailedPrefix = "error del Sandbox ejecutando tests: ";
+
+    /// <summary>Longitud máxima del detalle de un fallo.</summary>
     public const int MaxDetailLength = 1000;
+
+    /// <summary>Longitud máxima del feedback enviado al Programador entre intentos.</summary>
+    private const int MaxFeedbackLength = 8000;
 
     public async Task RunAsync(Guid runId, CancellationToken cancellationToken)
     {
@@ -327,8 +338,9 @@ internal sealed partial class RunOrchestrator(
     }
 
     /// <summary>
-    /// AD-16 paso 4: bucle de intentos del Programador. Tras un intento exitoso, hoy se detiene en el puente
-    /// provisional a la historia 2.4 (Failed(StageError, "Pruebas no disponibles")).
+    /// AD-16 paso 4: bucle de intentos del Programador con validación obligatoria mediante <see cref="ITestRunner"/>.
+    /// Al superar compilación, tests y test nuevo obligatorio, persiste <c>run_test_reports</c> y se detiene en el
+    /// puente provisional hacia la Épica 3 (<c>Failed(StageError, "Revisión no disponible")</c>).
     /// </summary>
     private async Task CodeAsync(PipelineDbContext context, PipelineRun run, ISandboxSession? sandbox, CancellationToken cancellationToken)
     {
@@ -379,6 +391,17 @@ internal sealed partial class RunOrchestrator(
             return;
         }
 
+        TestBaseline baseline;
+        try
+        {
+            baseline = await testRunner.CaptureBaselineAsync(sandbox, cancellationToken).ConfigureAwait(false);
+        }
+        catch (SandboxUnavailableException ex)
+        {
+            await FailAsync(context, run, FailureReason.StageError, Truncate(TestRunnerFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
         string? feedback = null;
         while (run.State == RunState.Coding && run.CodingAttempts < config.MaxCodingAttempts)
         {
@@ -389,12 +412,43 @@ internal sealed partial class RunOrchestrator(
             switch (result)
             {
                 case CodingResult.Completed:
-                    run.CompleteCodingAttempt();
+                    TestReport report;
+                    try
+                    {
+                        report = await testRunner.RunAsync(sandbox, baseline, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (SandboxUnavailableException ex)
+                    {
+                        await FailAsync(context, run, FailureReason.StageError, Truncate(TestRunnerFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+
+                    report = RedactTestReport(report);
+                    await UpsertTestReportAsync(context, run.Id, report, cancellationToken).ConfigureAwait(false);
+
+                    if (report.Passed)
+                    {
+                        run.CompleteCodingAttempt();
+                        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                        // Puente provisional hacia la Épica 3 (Revisión):
+                        await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+
+                    var testFeedback = BuildTestFailureFeedback(report);
+                    var shortReason = Truncate(testFeedback);
+                    var testAttemptFailedEvent = run.RecordFailedCodingAttempt(shortReason);
+                    await log.AddAsync(context, run.Id, testAttemptFailedEvent, cancellationToken).ConfigureAwait(false);
                     await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                    // Puente provisional hasta la historia 2.4 (ITestRunner):
-                    await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
-                    return;
+                    feedback = TextLimits.Truncate(testFeedback, MaxFeedbackLength);
+                    if (run.CodingAttempts >= config.MaxCodingAttempts)
+                    {
+                        await FailAsync(context, run, FailureReason.TestsFailed, shortReason, cancellationToken).ConfigureAwait(false);
+                        return;
+                    }
+                    break;
 
                 case CodingResult.Failed failed:
                     var attemptFailedEvent = run.RecordFailedCodingAttempt(failed.Reason);
@@ -418,6 +472,97 @@ internal sealed partial class RunOrchestrator(
         {
             await FailAsync(context, run, FailureReason.TestsFailed, "reintentos agotados", cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    private TestReport RedactTestReport(TestReport report)
+    {
+        var redactor = log.Redactor;
+        var redactedOutput = report.BuildOutput is null ? null : redactor.Redact(report.BuildOutput);
+        var redactedFailures = report.FailedTestCases.Count == 0
+            ? report.FailedTestCases
+            : report.FailedTestCases
+                .Select(tc => tc with
+                {
+                    ErrorMessage = tc.ErrorMessage is null ? null : redactor.Redact(tc.ErrorMessage),
+                    StackTrace = tc.StackTrace is null ? null : redactor.Redact(tc.StackTrace),
+                })
+                .ToArray();
+
+        return report with
+        {
+            BuildOutput = redactedOutput,
+            FailedTestCases = redactedFailures,
+        };
+    }
+
+    private async Task UpsertTestReportAsync(PipelineDbContext context, Guid runId, TestReport report, CancellationToken cancellationToken)
+    {
+        var existing = await context.TestReports.SingleOrDefaultAsync(t => t.RunId == runId, cancellationToken).ConfigureAwait(false);
+        if (existing is null)
+        {
+            context.TestReports.Add(new RunTestReportRecord
+            {
+                RunId = runId,
+                ReportJson = TestReportSerializer.Serialize(report),
+                Passed = report.Passed,
+                TotalTests = report.TotalTests,
+                FailedTests = report.FailedTests,
+                NewTestsCount = report.NewTests.Count,
+                CreatedAt = log.UtcNow,
+            });
+        }
+        else
+        {
+            existing.ReportJson = TestReportSerializer.Serialize(report);
+            existing.Passed = report.Passed;
+            existing.TotalTests = report.TotalTests;
+            existing.FailedTests = report.FailedTests;
+            existing.NewTestsCount = report.NewTests.Count;
+            existing.CreatedAt = log.UtcNow;
+        }
+    }
+
+    internal static string BuildTestFailureFeedback(TestReport report)
+    {
+        if (!report.BuildSucceeded)
+        {
+            var output = string.IsNullOrWhiteSpace(report.BuildOutput)
+                ? "sin salida del compilador"
+                : report.BuildOutput.Trim();
+            return $"La compilación ha fallado:\n{output}";
+        }
+
+        var sb = new StringBuilder();
+        if (report.FailedTests > 0)
+        {
+            sb.Append($"Han fallado {report.FailedTests} test(s):");
+            foreach (var failed in report.FailedTestCases)
+            {
+                sb.AppendLine();
+                sb.Append("- ").Append(failed.Name);
+                if (!string.IsNullOrWhiteSpace(failed.ErrorMessage))
+                {
+                    sb.Append(": ").Append(failed.ErrorMessage);
+                }
+
+                if (!string.IsNullOrWhiteSpace(failed.StackTrace))
+                {
+                    sb.AppendLine().Append("  ").Append(failed.StackTrace);
+                }
+            }
+        }
+
+        if (report.NewTests.Count == 0)
+        {
+            if (sb.Length > 0)
+            {
+                sb.AppendLine();
+            }
+
+            sb.Append("No se ha añadido ningún test nuevo que pase y verifique el cambio.");
+        }
+
+        return sb.Length > 0 ? sb.ToString() : "Los tests no han superado los criterios de aprobación.";
     }
 
     private async Task FailAsync(PipelineDbContext context, PipelineRun run, FailureReason reason, string detail, CancellationToken cancellationToken)

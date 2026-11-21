@@ -28,6 +28,7 @@ internal static class GetRunEndpoint
 
         var events = await runs.GetEventsAsync(run.RunId, 0, cancellationToken);
         var spec = await runs.GetSpecAsync(run.RunId, cancellationToken);
+        var testReport = await runs.GetTestReportAsync(run.RunId, cancellationToken);
         return Results.Ok(new RunResponse(
             run.RunId,
             run.ShortId,
@@ -39,6 +40,7 @@ internal static class GetRunEndpoint
             run.CreatedAt,
             run.UpdatedAt,
             spec,
+            testReport,
             events));
     }
 
@@ -60,4 +62,5 @@ internal sealed record RunResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
     Spec? Spec,
+    TestReport? TestReport,
     IReadOnlyList<RunEvent> Events);

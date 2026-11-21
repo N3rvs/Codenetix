@@ -60,6 +60,18 @@ internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFact
         return json is null ? null : SpecSerializer.Deserialize(json);
     }
 
+    public async Task<TestReport?> GetTestReportAsync(Guid runId, CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var json = await context.TestReports
+            .AsNoTracking()
+            .Where(t => t.RunId == runId)
+            .Select(t => t.ReportJson)
+            .FirstOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return json is null ? null : TestReportSerializer.Deserialize(json);
+    }
+
     private static bool IsShortId(string value) =>
         value.Length == 8 && value.All(c => char.IsAsciiHexDigit(c));
 }

@@ -153,6 +153,43 @@ namespace CodeNetix.Pipeline.Data.Migrations
                     b.ToTable("run_runs", (string)null);
                 });
 
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunTestReportRecord", b =>
+                {
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("FailedTests")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("failed_tests");
+
+                    b.Property<int>("NewTestsCount")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("new_tests_count");
+
+                    b.Property<bool>("Passed")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("passed");
+
+                    b.Property<string>("ReportJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("report_json");
+
+                    b.Property<int>("TotalTests")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("total_tests");
+
+                    b.HasKey("RunId")
+                        .HasName("pk_run_test_reports");
+
+                    b.ToTable("run_test_reports", (string)null);
+                });
+
             modelBuilder.Entity("CodeNetix.Pipeline.Data.RunEventRecord", b =>
                 {
                     b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
@@ -171,6 +208,16 @@ namespace CodeNetix.Pipeline.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_run_specs_run_runs");
+                });
+
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunTestReportRecord", b =>
+                {
+                    b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
+                        .WithOne()
+                        .HasForeignKey("CodeNetix.Pipeline.Domain.RunTestReportRecord", "RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_test_reports_run_runs");
                 });
 #pragma warning restore 612, 618
         }
