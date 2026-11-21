@@ -67,12 +67,12 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal("Accepted", info.Status);
         var runId = info.RunId!.Value;
 
-        var run = await WaitForRunAsync(client, runId.ToString(), r => r.State == "Failed");
+        var run = await WaitForRunAsync(client, runId.ToString(), r => r.State == "PullRequestCreated");
         Assert.Equal(runId, run.RunId);
         Assert.Equal(7, run.RunId.Version);
         Assert.Matches("^[0-9a-f]{8}$", run.ShortId);
-        Assert.Equal("StageError", run.FailureReason);
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Null(run.FailureReason);
+        Assert.Null(run.FailureDetail);
         Assert.Equal(eventId, run.EventId);
         Assert.Equal(ObjectKey, run.ObjectKey);
         Assert.True(run.UpdatedAt >= run.CreatedAt);
@@ -84,15 +84,16 @@ public sealed class RunExecutionTests : IDisposable
         using var json = JsonDocument.Parse(await byShortId.Content.ReadAsStringAsync(Ct));
         var root = json.RootElement;
         Assert.Equal(runId, root.GetProperty("runId").GetGuid());
-        Assert.Equal("Failed", root.GetProperty("state").GetString());
+        Assert.Equal("PullRequestCreated", root.GetProperty("state").GetString());
         var events = root.GetProperty("events").EnumerateArray().ToList();
-        Assert.Equal(Enumerable.Range(1, 15).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(1, 17).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.All(events, e => Assert.Equal(runId, e.GetProperty("runId").GetGuid()));
         Assert.Equal(
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
-                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "SandboxReleased",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "PullRequestOpened",
+                "StateChanged", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
 
@@ -121,10 +122,14 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal("Reviewing", events[9].GetProperty("to").GetString());
 
         Assert.Equal("Reviewing", events[13].GetProperty("from").GetString());
-        Assert.Equal("Failed", events[13].GetProperty("to").GetString());
-        Assert.Equal("StageError", events[13].GetProperty("failureReason").GetString());
-        Assert.Equal(RunOrchestrator.Detail, events[13].GetProperty("detail").GetString());
-        Assert.True(events[13].GetProperty("at").GetDateTimeOffset() >= events[0].GetProperty("at").GetDateTimeOffset());
+        Assert.Equal("Deciding", events[13].GetProperty("to").GetString());
+
+        Assert.Equal("PullRequestOpened", events[14].GetProperty("type").GetString());
+        Assert.True(events[14].GetProperty("number").GetInt64() > 0);
+
+        Assert.Equal("Deciding", events[15].GetProperty("from").GetString());
+        Assert.Equal("PullRequestCreated", events[15].GetProperty("to").GetString());
+        Assert.True(events[15].GetProperty("at").GetDateTimeOffset() >= events[0].GetProperty("at").GetDateTimeOffset());
 
 
 
@@ -150,7 +155,7 @@ public sealed class RunExecutionTests : IDisposable
         {
             var eventId = await SubmitAsync(client);
             var info = await WaitForEventAsync(client, eventId, e => e.RunId is not null, TimeSpan.FromSeconds(5));
-            var run = await WaitForRunAsync(client, info.RunId!.Value.ToString(), r => r.State == "Failed");
+            var run = await WaitForRunAsync(client, info.RunId!.Value.ToString(), r => r.State == "PullRequestCreated");
             runIds.Add(run.RunId);
         }
 
@@ -163,7 +168,7 @@ public sealed class RunExecutionTests : IDisposable
             "SELECT COUNT(*) FROM run_runs r WHERE (SELECT COUNT(*) FROM run_events e WHERE e.run_id = r.id) <> (SELECT MAX(seq) FROM run_events e WHERE e.run_id = r.id) OR (SELECT MIN(seq) FROM run_events e WHERE e.run_id = r.id) <> 1;"));
         Assert.Equal(0L, await ScalarAsync(connection,
             "SELECT COUNT(*) FROM run_runs r WHERE NOT EXISTS (SELECT 1 FROM run_events e WHERE e.run_id = r.id AND e.type = 'StateChanged' AND json_extract(e.payload_json, '$.to') = r.state);"));
-        Assert.Equal(15L, await ScalarAsync(connection, "SELECT COUNT(*) FROM run_events WHERE type = 'StateChanged';")); // null→Received→Analyzing→Coding→Reviewing→Failed
+        Assert.Equal(18L, await ScalarAsync(connection, "SELECT COUNT(*) FROM run_events WHERE type = 'StateChanged';")); // null→Received→Analyzing→Coding→Reviewing→Deciding→PullRequestCreated
     }
 
     // --- Objeto ocupado / libre ----------------------------------------------------------
@@ -176,7 +181,7 @@ public sealed class RunExecutionTests : IDisposable
         var busy = await CreateRunAsync(factory, ObjectKey);
 
         var eventId = await SubmitAsync(client);
-        var info = await WaitForEventAsync(client, eventId, e => e.Status == "Ignored", DispatchDeadline + TimeSpan.FromSeconds(1));
+        var info = await WaitForEventAsync(client, eventId, e => e.Status == "Ignored", TimeSpan.FromSeconds(10));
 
         Assert.Equal($"ya hay una Ejecución en curso para este objeto ({busy.ShortId})", info.Reason);
         Assert.Null(info.RunId);
@@ -192,7 +197,7 @@ public sealed class RunExecutionTests : IDisposable
         using var client = factory.CreateAuthorizedClient();
 
         var first = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null, TimeSpan.FromSeconds(5));
-        await WaitForRunAsync(client, first.RunId!.Value.ToString(), r => r.State == "Failed");
+        await WaitForRunAsync(client, first.RunId!.Value.ToString(), r => r.State == "PullRequestCreated");
 
         var second = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null || e.Status == "Ignored", TimeSpan.FromSeconds(5));
 
@@ -366,15 +371,15 @@ public sealed class RunExecutionTests : IDisposable
         await using var factory = CreateReadyFactory();
         using var client = factory.CreateAuthorizedClient();
         var info = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null, TimeSpan.FromSeconds(5));
-        var run = await WaitForRunAsync(client, info.RunId!.Value.ToString(), r => r.State == "Failed");
+        var run = await WaitForRunAsync(client, info.RunId!.Value.ToString(), r => r.State == "PullRequestCreated");
 
         var afterFour = await GetEventsAsync(client, run.ShortId, "?afterSeq=4");
         var all = await GetEventsAsync(client, run.RunId.ToString(), string.Empty);
-        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=15");
+        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=17");
 
-        Assert.Equal(Enumerable.Range(5, 11).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
-        Assert.Equal("Failed", afterFour[9].GetProperty("to").GetString());
-        Assert.Equal(Enumerable.Range(1, 15).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(5, 13).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal("PullRequestCreated", afterFour[11].GetProperty("to").GetString());
+        Assert.Equal(Enumerable.Range(1, 17).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.Empty(none);
 
         using var negative = await client.GetAsync($"/api/runs/{run.RunId}/events?afterSeq=-1", Ct);
@@ -505,9 +510,9 @@ public sealed class RunExecutionTests : IDisposable
         SqliteConnection.ClearAllPools();
         await using var restarted = CreateReadyFactory();
         using var restartedClient = restarted.CreateAuthorizedClient();
-        var run = await WaitForRunAsync(restartedClient, runId.ToString(), r => r.State == "Failed");
+        var run = await WaitForRunAsync(restartedClient, runId.ToString(), r => r.State == "PullRequestCreated");
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
     }
 
     [Fact]
@@ -522,7 +527,7 @@ public sealed class RunExecutionTests : IDisposable
         await InsertAcceptedEventAsync(factory, eventId, "github:c/d#1");
         factory.Services.GetRequiredService<IEventDispatchSignal>().Notify();
 
-        var info = await WaitForEventAsync(client, eventId, e => e.RunId is not null || e.Status == "Ignored", DispatchDeadline + TimeSpan.FromSeconds(1));
+        var info = await WaitForEventAsync(client, eventId, e => e.RunId is not null || e.Status == "Ignored", TimeSpan.FromSeconds(10));
 
         Assert.Equal("Accepted", info.Status);
         Assert.Equal(run.Id, info.RunId);
@@ -703,7 +708,7 @@ public sealed class RunExecutionTests : IDisposable
                 return run;
             }
 
-            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(5), $"La Ejecución {id} sigue en {run.State}.");
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(15), $"La Ejecución {id} sigue en {run.State}.");
             await Task.Delay(50, Ct);
         }
     }

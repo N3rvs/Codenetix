@@ -101,7 +101,9 @@ public sealed class EarlyRejectionTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(("StageError", RunOrchestrator.Detail), (run.FailureReason, run.FailureDetail));
+        Assert.Equal("PullRequestCreated", run.State);
+        Assert.Null(run.FailureReason);
+        Assert.Null(run.FailureDetail);
         Assert.Equal(JsonValueKind.Object, run.Json.GetProperty("spec").ValueKind);
         Assert.Equal(0, factory.GitHub!.CommentPosts);
         Assert.Empty(factory.GitHub.CommentsOn("o", "r", run.Number));

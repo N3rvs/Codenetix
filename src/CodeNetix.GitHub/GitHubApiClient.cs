@@ -2,6 +2,8 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using CodeNetix.Contracts;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CodeNetix.GitHub;
@@ -9,7 +11,8 @@ namespace CodeNetix.GitHub;
 /// <summary>Respuesta de <see cref="GitHubApiClient.GetAsync"/>: <see cref="Body"/> solo en 2xx.</summary>
 /// <param name="RateLimited">429, o 403 con <c>x-ratelimit-remaining: 0</c>.</param>
 /// <param name="Link">Cabecera <c>Link</c> de paginación (solo en 2xx), o <c>null</c>.</param>
-internal sealed record GitHubResponse(HttpStatusCode Status, JsonElement? Body, bool RateLimited, string? Link = null);
+/// <param name="ErrorBody">Cuerpo JSON de error en respuestas no 2xx (cuando el servidor devuelve JSON), o <c>null</c>.</param>
+internal sealed record GitHubResponse(HttpStatusCode Status, JsonElement? Body, bool RateLimited, string? Link = null, JsonElement? ErrorBody = null);
 
 /// <summary>
 /// Cliente HTTP mínimo de la API REST de GitHub. Envía <c>Authorization: Bearer</c>,
@@ -30,16 +33,30 @@ internal sealed class GitHubApiClient : IDisposable
 
     private readonly HttpClient _http;
     private readonly GitHubOptions _options;
+    private readonly GitSafetyGuard _safetyGuard;
 
     public GitHubApiClient(IOptions<GitHubOptions> options)
-        : this(options, DefaultTimeout)
+        : this(options, new GitSafetyGuard(NullLogger<GitSafetyGuard>.Instance), DefaultTimeout)
+    {
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public GitHubApiClient(IOptions<GitHubOptions> options, GitSafetyGuard safetyGuard)
+        : this(options, safetyGuard, DefaultTimeout)
     {
     }
 
     internal GitHubApiClient(IOptions<GitHubOptions> options, TimeSpan timeout)
+        : this(options, new GitSafetyGuard(NullLogger<GitSafetyGuard>.Instance), timeout)
+    {
+    }
+
+    internal GitHubApiClient(IOptions<GitHubOptions> options, GitSafetyGuard safetyGuard, TimeSpan timeout)
     {
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(safetyGuard);
         _options = options.Value;
+        _safetyGuard = safetyGuard;
         _http = new HttpClient(new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
@@ -70,6 +87,11 @@ internal sealed class GitHubApiClient : IDisposable
 
     private async Task<GitHubResponse> SendAsync(HttpMethod method, string relativePath, byte[]? jsonBody, CancellationToken cancellationToken)
     {
+        if (IsMergeEndpointPath(relativePath))
+        {
+            _safetyGuard.EnsureMergeForbidden("github api merge", relativePath);
+        }
+
         var token = _options.Token?.Trim();
         if (string.IsNullOrEmpty(token))
         {
@@ -160,13 +182,46 @@ internal sealed class GitHubApiClient : IDisposable
     {
         if (!response.IsSuccessStatusCode)
         {
-            return new GitHubResponse(response.StatusCode, null, IsRateLimited(response));
+            JsonElement? errorBody = null;
+            try
+            {
+                await using var errStream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                using var errDoc = await JsonDocument.ParseAsync(errStream, cancellationToken: cancellationToken).ConfigureAwait(false);
+                errorBody = errDoc.RootElement.Clone();
+            }
+            catch (Exception ex) when (ex is JsonException or IOException)
+            {
+                // Respuesta de error no JSON o vacía: se ignora.
+            }
+
+            return new GitHubResponse(response.StatusCode, null, IsRateLimited(response), Link: null, ErrorBody: errorBody);
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         var link = response.Headers.TryGetValues("Link", out var links) ? string.Join(", ", links) : null;
         return new GitHubResponse(response.StatusCode, document.RootElement.Clone(), false, link);
+    }
+
+    private static bool IsMergeEndpointPath(string? relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var path = relativePath.Trim();
+        var cut = path.IndexOfAny(['?', '#']);
+        if (cut >= 0)
+        {
+            path = path[..cut];
+        }
+
+        path = path.TrimEnd('/');
+        return path.EndsWith("/merge", StringComparison.OrdinalIgnoreCase)
+            || path.EndsWith("/merges", StringComparison.OrdinalIgnoreCase)
+            || path.Equals("merge", StringComparison.OrdinalIgnoreCase)
+            || path.Equals("merges", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsRedirect(HttpStatusCode status) => status is HttpStatusCode.MovedPermanently

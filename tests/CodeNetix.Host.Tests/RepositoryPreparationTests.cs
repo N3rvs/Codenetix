@@ -326,16 +326,17 @@ public sealed class RepositoryPreparationTests : IDisposable
 
         var run = await RunToTerminalAsync(client, "nocfg");
 
-        Assert.Equal("Failed", run.State);
-        Assert.Equal("StageError", run.FailureReason);
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
+        Assert.Null(run.FailureReason);
+        Assert.Null(run.FailureDetail);
 
         var events = await GetEventsAsync(client, run.RunId);
         Assert.Equal(
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
-                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "SandboxReleased",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "PullRequestOpened",
+                "StateChanged", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal(sha, events[2].GetProperty("baseSha").GetString());
@@ -343,7 +344,8 @@ public sealed class RepositoryPreparationTests : IDisposable
         Assert.Equal(("Received", "Analyzing"), (events[4].GetProperty("from").GetString(), events[4].GetProperty("to").GetString()));
         Assert.Equal(("Analyzing", "Coding"), (events[7].GetProperty("from").GetString(), events[7].GetProperty("to").GetString()));
         Assert.Equal(("Coding", "Reviewing"), (events[9].GetProperty("from").GetString(), events[9].GetProperty("to").GetString()));
-        Assert.Equal(("Reviewing", "Failed"), (events[13].GetProperty("from").GetString(), events[13].GetProperty("to").GetString()));
+        Assert.Equal(("Reviewing", "Deciding"), (events[13].GetProperty("from").GetString(), events[13].GetProperty("to").GetString()));
+        Assert.Equal(("Deciding", "PullRequestCreated"), (events[15].GetProperty("from").GetString(), events[15].GetProperty("to").GetString()));
 
         var (baseSha, config) = await ReadSnapshotAsync(run.RunId);
         Assert.Equal(sha, baseSha);
@@ -369,7 +371,8 @@ public sealed class RepositoryPreparationTests : IDisposable
 
         var run = await RunToTerminalAsync(client, "valid");
 
-        Assert.Equal("StageError", run.FailureReason);
+        Assert.Equal("PullRequestCreated", run.State);
+        Assert.Null(run.FailureReason);
         var root = (await ReadSnapshotAsync(run.RunId)).Config!.RootElement;
         Assert.Equal("file", root.GetProperty("source").GetString());
         Assert.Equal(["security"], Strings(root.GetProperty("reviewers")));
@@ -486,7 +489,8 @@ public sealed class RepositoryPreparationTests : IDisposable
         }
 
         Assert.True(rows >= 6, $"Solo {rows} filas.");
-        Assert.Equal("StageError", run.FailureReason);
+        Assert.Equal("PullRequestCreated", run.State);
+        Assert.Null(run.FailureReason);
     }
 
     // --- Utilidades ------------------------------------------------------------------------

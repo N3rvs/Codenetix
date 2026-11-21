@@ -3,10 +3,15 @@ using System.Diagnostics;
 using System.Formats.Tar;
 using System.Text;
 using CodeNetix.Contracts;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace CodeNetix.GitHub;
+
+/// <summary>Resultado de <see cref="RepositoryWorkspace.CommitAndPushBranchAsync"/>.</summary>
+internal sealed record PushedBranch(string BranchName, string DefaultBranch, string CommitSha);
 
 /// <summary>
 /// Árbol de trabajo de una Ejecución (AD-8, AD-16 paso 1) en <c>&lt;WorkspacesDirectory&gt;/&lt;shortId&gt;</c>:
@@ -21,11 +26,36 @@ namespace CodeNetix.GitHub;
 /// </list>
 /// Si algo falla se borra el árbol y se lanza <see cref="RepositoryPreparationException"/> con un motivo sin el token.
 /// </summary>
-internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> options, ILogger<RepositoryWorkspace> logger) : IRepositoryWorkspace
+internal sealed partial class RepositoryWorkspace : IRepositoryWorkspace
 {
+    private readonly IOptions<GitHubOptions> options;
+    private readonly ILogger<RepositoryWorkspace> logger;
+    private readonly GitSafetyGuard _safetyGuard;
+    private readonly ISecretRedactor? _redactor;
+
+    public RepositoryWorkspace(IOptions<GitHubOptions> options, ILogger<RepositoryWorkspace> logger)
+        : this(options, logger, new GitSafetyGuard(NullLogger<GitSafetyGuard>.Instance), redactor: null)
+    {
+    }
+
+    [ActivatorUtilitiesConstructor]
+    public RepositoryWorkspace(
+        IOptions<GitHubOptions> options,
+        ILogger<RepositoryWorkspace> logger,
+        GitSafetyGuard safetyGuard,
+        ISecretRedactor? redactor = null)
+    {
+        this.options = options;
+        this.logger = logger;
+        _safetyGuard = safetyGuard ?? throw new ArgumentNullException(nameof(safetyGuard));
+        _redactor = redactor;
+    }
+
     public const string RepoConfigFileName = "codenetix.yml";
 
     public static readonly TimeSpan DefaultCloneTimeout = TimeSpan.FromSeconds(120);
+
+    private static readonly TimeSpan PushTimeout = TimeSpan.FromSeconds(120);
 
     private static readonly TimeSpan CommandTimeout = TimeSpan.FromSeconds(30);
 
@@ -163,6 +193,171 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
                 // Limpieza de mejor esfuerzo del índice temporal.
             }
         }
+    }
+
+    /// <summary>
+    /// Crea la rama <paramref name="branchName"/> exactamente sobre <paramref name="baseSha"/> con un único commit de
+    /// los cambios sincronizados en el árbol de trabajo (verificando ausencia de <c>.git</c> y secretos) y hace push
+    /// validado por <see cref="GitSafetyGuard"/> usando <c>http.extraHeader</c> efímero (AD-8).
+    /// </summary>
+    internal async Task<PushedBranch> CommitAndPushBranchAsync(
+        Guid runId,
+        string baseSha,
+        string branchName,
+        string commitMessage,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(baseSha) || !IsSha(baseSha.Trim()))
+        {
+            throw new PullRequestPublishException("el commit base para crear la rama no es válido");
+        }
+
+        if (string.IsNullOrWhiteSpace(commitMessage))
+        {
+            throw new PullRequestPublishException("el mensaje del commit está vacío");
+        }
+
+        var normalizedBaseSha = baseSha.Trim();
+        var path = WorkspacePathOf(runId);
+        if (!Directory.Exists(path))
+        {
+            throw new PullRequestPublishException("el árbol de trabajo de la Ejecución no existe");
+        }
+
+        var defaultBranch = await DetectDefaultBranchAsync(path, cancellationToken).ConfigureAwait(false);
+        _safetyGuard.EnsurePushAllowed(branchName, defaultBranch);
+
+        var token = options.Value.Token?.Trim();
+        var normalizedBranch = branchName.Trim();
+        if (normalizedBranch.StartsWith("refs/heads/", StringComparison.Ordinal))
+        {
+            normalizedBranch = normalizedBranch["refs/heads/".Length..];
+        }
+
+        // Fija la nueva rama exactamente en BaseSha sin tocar los cambios sincronizados del árbol de trabajo.
+        await RunCheckedAsync(path, ["update-ref", $"refs/heads/{normalizedBranch}", normalizedBaseSha], token, cancellationToken).ConfigureAwait(false);
+        await RunCheckedAsync(path, ["symbolic-ref", "HEAD", $"refs/heads/{normalizedBranch}"], token, cancellationToken).ConfigureAwait(false);
+        await RunCheckedAsync(path, ["read-tree", normalizedBaseSha], token, cancellationToken).ConfigureAwait(false);
+        await RunCheckedAsync(path, ["add", "-A"], token, cancellationToken).ConfigureAwait(false);
+
+        // Verificar que no haya ningún archivo .git en el commit.
+        var stagedRaw = await RunCheckedAsync(path, ["diff", "--cached", "--name-only", "-z"], token, cancellationToken).ConfigureAwait(false);
+        foreach (var stagedPath in stagedRaw.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (ContainsGitSegment(stagedPath))
+            {
+                throw new PullRequestPublishException("el commit contiene archivos .git prohibidos");
+            }
+        }
+
+        // Verificar que las líneas añadidas del diff preparado (incluidos binarios con --text) no contengan secretos.
+        var stagedDiff = await RunCheckedAsync(path, ["diff", "--cached", "--no-ext-diff", "--text", "--unified=0"], token, cancellationToken).ConfigureAwait(false);
+        foreach (var line in stagedDiff.Split('\n'))
+        {
+            if (!line.StartsWith('+') || line.StartsWith("+++", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if ((!string.IsNullOrEmpty(token) && line.Contains(token, StringComparison.Ordinal))
+                || (_redactor is not null && !string.Equals(_redactor.Redact(line), line, StringComparison.Ordinal)))
+            {
+                throw new PullRequestPublishException("el commit contiene posibles secretos y ha sido bloqueado");
+            }
+        }
+
+        var safeMessage = _redactor is null ? commitMessage.Trim() : _redactor.Redact(commitMessage.Trim());
+        await RunCheckedAsync(
+            path,
+            [
+                "-c", "user.name=CodeNetix",
+                "-c", "user.email=codenetix@users.noreply.github.com",
+                "-c", "commit.gpgsign=false",
+                "commit", "--quiet", "--no-verify", "--allow-empty", "-m", safeMessage,
+            ],
+            token,
+            cancellationToken).ConfigureAwait(false);
+
+        // Verificar en un solo comando que HEAD es exactamente 1 commit cuyo único padre es BaseSha.
+        var revListLine = (await RunCheckedAsync(path, ["rev-list", "--parents", "--max-count=1", "HEAD"], token, cancellationToken).ConfigureAwait(false)).Trim();
+        var shas = revListLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (shas.Length != 2
+            || !IsSha(shas[0])
+            || !string.Equals(shas[1], normalizedBaseSha, StringComparison.Ordinal))
+        {
+            throw new PullRequestPublishException("el historial de la rama no tiene exactamente un único commit sobre BaseSha");
+        }
+
+        var commitSha = shas[0];
+
+        // Segunda comprobación defensiva justo antes de ejecutar git push.
+        _safetyGuard.EnsurePushAllowed(normalizedBranch, defaultBranch);
+
+        var push = await RunGitAsync(
+            path,
+            ["push", "--quiet", "--no-verify", "--force-with-lease", "--no-tags", "--", "origin", $"refs/heads/{normalizedBranch}:refs/heads/{normalizedBranch}"],
+            token,
+            PushTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (push.TimedOut)
+        {
+            throw new PullRequestPublishException($"git push de {normalizedBranch} ha superado el tiempo máximo ({PushTimeout.TotalSeconds:0} s)");
+        }
+
+        if (push.ExitCode != 0)
+        {
+            var reason = Reason(push, token);
+            if (_redactor is not null)
+            {
+                reason = _redactor.Redact(reason);
+            }
+
+            throw new PullRequestPublishException($"no se ha podido hacer push de {normalizedBranch}: {reason}");
+        }
+
+        await VerifyNoCredentialsAsync(path, token, cancellationToken).ConfigureAwait(false);
+        LogPushed(normalizedBranch, commitSha, RunShortId.Of(runId));
+        return new PushedBranch(normalizedBranch, defaultBranch, commitSha);
+    }
+
+    private async Task<string> DetectDefaultBranchAsync(string path, CancellationToken cancellationToken)
+    {
+        var originHead = await RunGitAsync(path, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], token: null, CommandTimeout, cancellationToken).ConfigureAwait(false);
+        if (!originHead.TimedOut && originHead.ExitCode == 0)
+        {
+            var raw = originHead.StandardOutput.Trim();
+            if (raw.StartsWith("origin/", StringComparison.Ordinal) && raw.Length > "origin/".Length)
+            {
+                return raw["origin/".Length..];
+            }
+        }
+
+        var localHead = await RunGitAsync(path, ["symbolic-ref", "--short", "HEAD"], token: null, CommandTimeout, cancellationToken).ConfigureAwait(false);
+        if (!localHead.TimedOut && localHead.ExitCode == 0)
+        {
+            var raw = localHead.StandardOutput.Trim();
+            if (!string.IsNullOrWhiteSpace(raw)
+                && !string.Equals(raw, "HEAD", StringComparison.Ordinal)
+                && !raw.StartsWith(PullRequestBranch.Prefix, StringComparison.Ordinal))
+            {
+                return raw;
+            }
+        }
+
+        throw new PullRequestPublishException("no se pudo determinar la rama por defecto del repositorio");
+    }
+
+    private static bool ContainsGitSegment(string relativePath)
+    {
+        foreach (var segment in relativePath.Replace('\\', '/').Split('/'))
+        {
+            if (string.Equals(segment.TrimEnd('.', ' '), ".git", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static async Task SyncWorkspaceTarAsync(
@@ -548,9 +743,10 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
     /// <summary>
     /// Ejecuta <c>git</c> con un entorno limpio: sin variables <c>GIT_*</c> heredadas (p. ej. <c>GIT_TRACE_CURL</c>,
     /// que volcaría cabeceras), sin preguntas por terminal y sin ayudantes de credenciales. Con <paramref name="token"/>,
-    /// añade <c>http.extraHeader</c> por <c>GIT_CONFIG_*</c> (solo para el clon).
+    /// añade <c>http.extraHeader</c> por <c>GIT_CONFIG_*</c> (solo para el clon/push).
+    /// Bloquea cualquier subcomando <c>merge</c> a través de <see cref="GitSafetyGuard"/>.
     /// </summary>
-    private static async Task<GitResult> RunGitAsync(
+    internal async Task<GitResult> RunGitAsync(
         string? workingDirectory,
         IReadOnlyList<string> arguments,
         string? token,
@@ -558,6 +754,11 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         CancellationToken cancellationToken,
         IReadOnlyDictionary<string, string>? extraEnvironment = null)
     {
+        if (IsMergeSubcommand(arguments))
+        {
+            _safetyGuard.EnsureMergeForbidden("git merge");
+        }
+
         using var process = StartGit(workingDirectory, arguments, token, binaryOutput: false, extraEnvironment);
         var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
@@ -568,6 +769,28 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         }
 
         return new GitResult(process.ExitCode, await stdout.ConfigureAwait(false), await stderr.ConfigureAwait(false), TimedOut: false);
+    }
+
+    private static bool IsMergeSubcommand(IReadOnlyList<string> arguments)
+    {
+        for (var i = 0; i < arguments.Count; i++)
+        {
+            var arg = arguments[i];
+            if (arg is "-c" or "-C" or "--git-dir" or "--work-tree" or "--namespace" or "--super-prefix")
+            {
+                i++;
+                continue;
+            }
+
+            if (arg.StartsWith('-'))
+            {
+                continue;
+            }
+
+            return string.Equals(arg, "merge", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -808,10 +1031,13 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         }
     }
 
-    private sealed record GitResult(int ExitCode, string StandardOutput, string StandardError, bool TimedOut);
+    internal sealed record GitResult(int ExitCode, string StandardOutput, string StandardError, bool TimedOut);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Repositorio {Owner}/{Repo} clonado en el commit {BaseSha} (Ejecución {ShortId}).")]
     private partial void LogPrepared(string owner, string repo, string baseSha, string shortId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Rama {Branch} publicada con commit {CommitSha} (Ejecución {ShortId}).")]
+    private partial void LogPushed(string branch, string commitSha, string shortId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido borrar el árbol de trabajo '{Path}': {Reason}.")]
     private partial void LogDeleteFailed(string path, string reason);

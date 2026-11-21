@@ -107,9 +107,9 @@ public sealed class ReviewerTests : IDisposable
         using var client = factory.CreateAuthorizedClient();
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal("Failed", run.GetProperty("state").GetString());
-        Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("PullRequestCreated", run.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureReason").ValueKind);
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureDetail").ValueKind);
 
         // Aislamiento (FR-14, AD-5): ningún prompt de Revisor contiene la salida del Programador,
         // y todos contienen Spec, Diff y TestReport.

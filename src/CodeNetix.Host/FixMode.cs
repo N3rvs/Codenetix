@@ -386,6 +386,9 @@ internal static class FixMode
             case "ReviewerOutputRejected":
                 return $"[{seq}] ReviewerOutputRejected ronda {GetNumber(item, "round")} {GetString(item, "reviewer")} intento {GetNumber(item, "attempt")}: {GetString(item, "error")}".TrimEnd();
 
+            case "PullRequestOpened":
+                return $"[{seq}] PullRequestOpened #{GetNumber(item, "number")} {GetString(item, "url")}".TrimEnd();
+
             default:
                 return $"[{seq}] {type}";
         }

@@ -79,9 +79,9 @@ public sealed class ReviewRoundsTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal("Failed", run.GetProperty("state").GetString());
-        Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("PullRequestCreated", run.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureReason").ValueKind);
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureDetail").ValueKind);
 
         Assert.Single(coder.Inputs);
         Assert.Equal(1, Volatile.Read(ref testRuns));
@@ -183,9 +183,9 @@ public sealed class ReviewRoundsTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal("Failed", run.GetProperty("state").GetString());
-        Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("PullRequestCreated", run.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureReason").ValueKind);
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureDetail").ValueKind);
 
         // Transición Reviewing → Coding registrada.
         Assert.Contains(run.GetProperty("events").EnumerateArray(), e =>
@@ -539,9 +539,9 @@ public sealed class ReviewRoundsTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal("Failed", run.GetProperty("state").GetString());
-        Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("PullRequestCreated", run.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureReason").ValueKind);
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureDetail").ValueKind);
 
         // 4 intentos totales de Programador (2 en Ronda 1 + 2 en Ronda 2).
         Assert.Equal(4, coder.Inputs.Count);

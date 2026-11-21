@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore.Design;
 namespace CodeNetix.GitHub.Data;
 
 /// <summary>
-/// <c>DbContext</c> del módulo GitHub (AD-11): dueño de <c>gh_notifications</c>, con su propio historial
+/// <c>DbContext</c> del módulo GitHub (AD-11): dueño de <c>gh_notifications</c> y <c>gh_pull_requests</c>, con su propio historial
 /// <see cref="MigrationsHistoryTable"/>. Las migraciones se generan con <c>dotnet-ef</c> y no se editan a mano.
 /// </summary>
 internal sealed class GitHubDbContext(DbContextOptions<GitHubDbContext> options) : DbContext(options)
@@ -14,8 +14,12 @@ internal sealed class GitHubDbContext(DbContextOptions<GitHubDbContext> options)
     public const string MigrationsHistoryTable = "__ef_migrations_" + Prefix;
     public const string NotificationsTable = Prefix + "_notifications";
     public const string RunKindIndex = "ux_" + NotificationsTable + "_run_id_kind";
+    public const string PullRequestsTable = Prefix + "_pull_requests";
+    public const string PullRequestsRunIndex = "ux_" + PullRequestsTable + "_run_id";
 
     public DbSet<NotificationRecord> Notifications => Set<NotificationRecord>();
+
+    public DbSet<PullRequestRecord> PullRequests => Set<PullRequestRecord>();
 
     /// <summary>Configura SQLite con el historial de migraciones del módulo.</summary>
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)
@@ -44,7 +48,40 @@ internal sealed class GitHubDbContext(DbContextOptions<GitHubDbContext> options)
 
         // La idempotencia por (run_id, kind) la garantiza el índice, no una consulta previa.
         notifications.HasIndex(n => new { n.RunId, n.Kind }).IsUnique().HasDatabaseName(RunKindIndex);
+
+        var pullRequests = modelBuilder.Entity<PullRequestRecord>();
+        pullRequests.ToTable(PullRequestsTable);
+        pullRequests.HasKey(p => p.Id).HasName("pk_" + PullRequestsTable);
+        pullRequests.Property(p => p.Id).HasColumnName("id").ValueGeneratedNever();
+        pullRequests.Property(p => p.RunId).HasColumnName("run_id");
+        pullRequests.Property(p => p.Number).HasColumnName("number");
+        pullRequests.Property(p => p.Url).HasColumnName("url").IsRequired();
+        pullRequests.Property(p => p.BranchName).HasColumnName("branch_name").IsRequired();
+        pullRequests.Property(p => p.CommitSha).HasColumnName("commit_sha").IsRequired();
+        pullRequests.Property(p => p.Title).HasColumnName("title").IsRequired();
+        pullRequests.Property(p => p.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        pullRequests.HasIndex(p => p.RunId).IsUnique().HasDatabaseName(PullRequestsRunIndex);
     }
+}
+
+/// <summary>Fila de <c>gh_pull_requests</c>: como mucho un PR publicado por Ejecución (AD-11).</summary>
+internal sealed class PullRequestRecord
+{
+    public Guid Id { get; set; }
+
+    public Guid RunId { get; set; }
+
+    public long Number { get; set; }
+
+    public string Url { get; set; } = string.Empty;
+
+    public string BranchName { get; set; } = string.Empty;
+
+    public string CommitSha { get; set; } = string.Empty;
+
+    public string Title { get; set; } = string.Empty;
+
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 /// <summary>Fila de <c>gh_notifications</c>: un aviso en una issue, como mucho uno por (<c>run_id</c>, <c>kind</c>).</summary>
