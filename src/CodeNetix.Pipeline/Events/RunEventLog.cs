@@ -34,8 +34,8 @@ internal sealed class RunEventLog(ISecretRedactor redactor, TimeProvider timePro
         return AddAsync(context, run.Id, change, cancellationToken);
     }
 
-    /// <summary>Añade <paramref name="payload"/> al contexto (no guarda) y lo devuelve con <c>Seq</c>, <c>RunId</c> y <c>At</c>.</summary>
-    public async Task<RunEvent> AddAsync(PipelineDbContext context, Guid runId, RunEvent payload, CancellationToken cancellationToken)
+    /// <summary>Añade <paramref name="payload"/> al contexto (no guarda) y lo devuelve con <c>Seq</c>, <c>RunId</c>, <c>StageId</c> y <c>At</c>.</summary>
+    public async Task<RunEvent> AddAsync(PipelineDbContext context, Guid runId, RunEvent payload, CancellationToken cancellationToken, Guid? stageId = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(payload);
@@ -50,10 +50,12 @@ internal sealed class RunEventLog(ISecretRedactor redactor, TimeProvider timePro
             .Select(e => (long?)e.Entity.Seq)
             .Max() ?? 0;
 
+        var effectiveStageId = stageId ?? payload.StageId;
         var stamped = payload with
         {
             Seq = Math.Max(persistedMax, pendingMax) + 1,
             RunId = runId,
+            StageId = effectiveStageId,
             At = UtcNow,
         };
 
@@ -62,13 +64,14 @@ internal sealed class RunEventLog(ISecretRedactor redactor, TimeProvider timePro
         {
             RunId = runId,
             Seq = stamped.Seq,
+            StageId = effectiveStageId,
             Type = RunEventJson.TypeOf(stamped),
             PayloadJson = json,
             At = stamped.At,
         });
 
         // Se devuelve lo que se persiste (ya redactado).
-        return RunEventJson.Deserialize(json, stamped.RunId, stamped.Seq, stamped.At);
+        return RunEventJson.Deserialize(json, stamped.RunId, stamped.Seq, stamped.At, effectiveStageId);
     }
 
     private const int SqliteConstraint = 19;
@@ -85,11 +88,11 @@ internal static class RunEventJson
 
     public static string Serialize(RunEvent runEvent) => JsonSerializer.Serialize(runEvent, Options);
 
-    public static RunEvent Deserialize(string json, Guid runId, long seq, DateTimeOffset at)
+    public static RunEvent Deserialize(string json, Guid runId, long seq, DateTimeOffset at, Guid? stageId = null)
     {
         var parsed = JsonSerializer.Deserialize<RunEvent>(json, Options)
             ?? throw new JsonException("RunEvent nulo.");
-        return parsed with { RunId = runId, Seq = seq, At = at };
+        return parsed with { RunId = runId, Seq = seq, StageId = stageId ?? parsed.StageId, At = at };
     }
 
     public static string TypeOf(RunEvent runEvent) => runEvent.GetType().Name;
@@ -163,12 +166,12 @@ internal sealed class RunEventSink(
             RunEvent? result = null;
             if (textToPersist is not null)
             {
-                result = await AppendCoreAsync(runId, appended with { Text = textToPersist }, cancellationToken).ConfigureAwait(false);
+                result = await AppendCoreAsync(runId, stageId, appended with { Text = textToPersist }, cancellationToken).ConfigureAwait(false);
             }
 
             if (shouldTruncate)
             {
-                var truncResult = await AppendCoreAsync(runId, new OutputTruncated(), cancellationToken).ConfigureAwait(false);
+                var truncResult = await AppendCoreAsync(runId, stageId, new OutputTruncated(), cancellationToken).ConfigureAwait(false);
                 result ??= truncResult;
             }
 
@@ -193,7 +196,7 @@ internal sealed class RunEventSink(
             }
         }
 
-        return await AppendCoreAsync(runId, payload, cancellationToken).ConfigureAwait(false);
+        return await AppendCoreAsync(runId, stageId, payload, cancellationToken).ConfigureAwait(false);
     }
 
     private static (string Text, int ByteCount) TruncateToUtf8Bytes(string text, int maxBytes)
@@ -234,10 +237,8 @@ internal sealed class RunEventSink(
         return (text[..bestChars], Encoding.UTF8.GetByteCount(text.AsSpan(0, bestChars)));
     }
 
-    private async Task<RunEvent> AppendCoreAsync(Guid runId, RunEvent payload, CancellationToken cancellationToken)
+    private async Task<RunEvent> AppendCoreAsync(Guid runId, Guid? stageId, RunEvent payload, CancellationToken cancellationToken)
     {
-
-
         for (var attempt = 1; ; attempt++)
         {
             await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
@@ -246,7 +247,7 @@ internal sealed class RunEventSink(
                 throw new InvalidOperationException($"No existe la Ejecución {runId}.");
             }
 
-            var appended = await log.AddAsync(context, runId, payload, cancellationToken).ConfigureAwait(false);
+            var appended = await log.AddAsync(context, runId, payload, cancellationToken, stageId).ConfigureAwait(false);
             try
             {
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);

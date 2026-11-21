@@ -90,6 +90,15 @@ internal static class ServeMode
                 agents.SchemaRetries = instance.Value.Agents?.SchemaRetries ?? AgentsOptions.DefaultSchemaRetries;
                 agents.Analyst = AgentEndpointResolver.ResolveAnalyst(instance.Value).Endpoint;
                 agents.Coder = AgentEndpointResolver.ResolveCoder(instance.Value).Endpoint;
+                agents.Reviewers = AgentEndpointResolver.ResolveReviewers(instance.Value).Endpoint;
+                agents.ReviewerOverrides.Clear();
+                foreach (var kind in Enum.GetValues<ReviewerKind>())
+                {
+                    if (AgentEndpointResolver.ResolveReviewer(instance.Value, kind).Endpoint is { } specific)
+                    {
+                        agents.ReviewerOverrides[kind] = specific;
+                    }
+                }
             });
         builder.Services.AddOptions<SandboxOptions>()
             .PostConfigure<IOptions<InstanceOptions>>((sandbox, instance) =>

@@ -283,6 +283,46 @@ internal sealed class DockerClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Tamaño máximo permitido al descargar un tar de un contenedor (256 MiB).</summary>
+    public const long MaxArchiveBytes = 256L * 1024 * 1024;
+
+    /// <summary><c>GET /containers/{id}/archive?path=…</c>: descarga el tar de <paramref name="path"/> en <paramref name="destination"/>.</summary>
+    public async Task GetArchiveAsync(string id, string path, Stream destination, TimeSpan timeout, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        var prefix = await GetApiPrefixAsync(cancellationToken).ConfigureAwait(false);
+        var requestPath = prefix + $"/containers/{EscapeName(id)}/archive?path={Uri.EscapeDataString(path)}";
+        using var request = new HttpRequestMessage(HttpMethod.Get, requestPath);
+        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeoutSource.CancelAfter(timeout);
+        try
+        {
+            using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeoutSource.Token).ConfigureAwait(false);
+            await EnsureSuccessAsync(response, timeoutSource.Token).ConfigureAwait(false);
+            var stream = await response.Content.ReadAsStreamAsync(timeoutSource.Token).ConfigureAwait(false);
+            await using (stream.ConfigureAwait(false))
+            {
+                var buffer = new byte[81920];
+                long totalBytes = 0;
+                int read;
+                while ((read = await stream.ReadAsync(buffer, timeoutSource.Token).ConfigureAwait(false)) > 0)
+                {
+                    totalBytes += read;
+                    if (totalBytes > MaxArchiveBytes)
+                    {
+                        throw new IOException($"el archivo exportado de '{path}' supera el límite máximo de {MaxArchiveBytes / (1024 * 1024)} MiB");
+                    }
+
+                    await destination.WriteAsync(buffer.AsMemory(0, read), timeoutSource.Token).ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Docker no ha respondido a GET {requestPath} en {timeout.TotalSeconds:0} s", ex);
+        }
+    }
+
     /// <summary><c>POST /containers/{id}/wait</c>: espera a que el contenedor termine y devuelve su código de salida.</summary>
     public async Task<int> WaitContainerAsync(string id, TimeSpan timeout, CancellationToken cancellationToken)
     {

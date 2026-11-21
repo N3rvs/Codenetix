@@ -380,6 +380,12 @@ internal static class FixMode
             case "SpecGenerated":
                 return $"[{seq}] SpecGenerated {GetString(item, "model")} ({GetNumber(item, "attempts")} intento(s))";
 
+            case "VerdictRecorded":
+                return $"[{seq}] VerdictRecorded ronda {GetNumber(item, "round")} {GetString(item, "reviewer")} → {GetString(item, "decision")} ({GetNumber(item, "findingCount")} hallazgo(s))";
+
+            case "ReviewerOutputRejected":
+                return $"[{seq}] ReviewerOutputRejected ronda {GetNumber(item, "round")} {GetString(item, "reviewer")} intento {GetNumber(item, "attempt")}: {GetString(item, "error")}".TrimEnd();
+
             default:
                 return $"[{seq}] {type}";
         }

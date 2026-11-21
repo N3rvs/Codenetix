@@ -55,6 +55,10 @@ internal sealed class FakeSandboxSession(Guid runId) : ISandboxSession
 
     public Func<SandboxCommand, SandboxExecResult>? ExecHandler { get; set; }
 
+    public Func<Stream, CancellationToken, Task>? ExportWorkspaceHandler { get; set; }
+
+    public int ExportCalls { get; private set; }
+
     public Task<SandboxExecResult> ExecAsync(SandboxCommand command, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -80,6 +84,16 @@ internal sealed class FakeSandboxSession(Guid runId) : ISandboxSession
     {
         cancellationToken.ThrowIfCancellationRequested();
         return Task.FromResult(HasWorkspaceChanges);
+    }
+
+    public async Task ExportWorkspaceAsync(Stream destination, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        ExportCalls++;
+        if (ExportWorkspaceHandler is not null)
+        {
+            await ExportWorkspaceHandler(destination, cancellationToken);
+        }
     }
 
 

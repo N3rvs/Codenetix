@@ -1,4 +1,5 @@
 using CodeNetix.Agents;
+using CodeNetix.Contracts;
 
 namespace CodeNetix.Host.Configuration;
 
@@ -26,6 +27,7 @@ internal static class AgentEndpointResolver
 
     public const string AnalystRole = "Analyst";
     public const string CoderRole = "Coder";
+    public const string ReviewersRole = "Reviewers";
 
     public static (AgentEndpoint? Endpoint, IReadOnlyList<string> Reasons) ResolveAnalyst(InstanceOptions options) =>
         ResolveRole(
@@ -61,6 +63,76 @@ internal static class AgentEndpointResolver
             "el Programador",
             effectiveCoder,
             fallbackModel);
+    }
+
+    public static (AgentEndpoint? Endpoint, IReadOnlyList<string> Reasons) ResolveReviewers(InstanceOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+
+        var reviewers = options.Agents?.Reviewers;
+        if (string.IsNullOrWhiteSpace(reviewers?.Provider) && string.IsNullOrWhiteSpace(reviewers?.Model))
+        {
+            return ResolveAnalyst(options);
+        }
+
+        if (!string.IsNullOrWhiteSpace(reviewers?.Provider))
+        {
+            return ResolveRole(
+                options,
+                ReviewersRole,
+                "los Revisores",
+                reviewers,
+                fallbackModel: null);
+        }
+
+        var analyst = options?.Agents?.Analyst;
+        var effective = new AgentRoleInstanceOptions
+        {
+            Provider = analyst?.Provider,
+            Model = reviewers?.Model,
+        };
+        var fallbackModel = analyst?.Model?.Trim() is { Length: > 0 } analystModel ? analystModel : null;
+        return ResolveRole(
+            options,
+            ReviewersRole,
+            "los Revisores",
+            effective,
+            fallbackModel);
+    }
+
+    public static (AgentEndpoint? Endpoint, IReadOnlyList<string> Reasons) ResolveReviewer(InstanceOptions options, ReviewerKind kind)
+    {
+        var reviewers = options?.Agents?.Reviewers;
+        var specific = kind switch
+        {
+            ReviewerKind.Security => reviewers?.Security,
+            ReviewerKind.Quality => reviewers?.Quality,
+            ReviewerKind.Tests => reviewers?.Tests,
+            _ => null,
+        };
+
+        if (specific is null || (string.IsNullOrWhiteSpace(specific.Provider) && string.IsNullOrWhiteSpace(specific.Model)))
+        {
+            return (null, []);
+        }
+
+        var roleName = $"{ReviewersRole}__{kind}";
+        var roleLabel = $"el Revisor {kind}";
+
+        if (!string.IsNullOrWhiteSpace(specific.Provider))
+        {
+            return ResolveRole(options, roleName, roleLabel, specific, fallbackModel: null);
+        }
+
+        var inheritedProvider = !string.IsNullOrWhiteSpace(reviewers?.Provider)
+            ? reviewers!.Provider
+            : options?.Agents?.Analyst?.Provider;
+        var effective = new AgentRoleInstanceOptions
+        {
+            Provider = inheritedProvider,
+            Model = specific.Model,
+        };
+        return ResolveRole(options, roleName, roleLabel, effective, fallbackModel: null);
     }
 
     private static (AgentEndpoint? Endpoint, IReadOnlyList<string> Reasons) ResolveRole(

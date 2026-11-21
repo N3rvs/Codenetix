@@ -45,7 +45,7 @@ internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFact
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return [.. rows.Select(r => RunEventJson.Deserialize(r.PayloadJson, r.RunId, r.Seq, r.At))];
+        return [.. rows.Select(r => RunEventJson.Deserialize(r.PayloadJson, r.RunId, r.Seq, r.At, r.StageId))];
     }
 
     public async Task<Spec?> GetSpecAsync(Guid runId, CancellationToken cancellationToken)
@@ -70,6 +70,33 @@ internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFact
             .FirstOrDefaultAsync(cancellationToken)
             .ConfigureAwait(false);
         return json is null ? null : TestReportSerializer.Deserialize(json);
+    }
+
+    public async Task<IReadOnlyList<RunVerdict>> GetVerdictsAsync(Guid runId, CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await context.Verdicts
+            .AsNoTracking()
+            .Where(v => v.RunId == runId)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return
+        [
+            .. rows
+                .OrderBy(v => v.Round)
+                .ThenBy(v => v.Reviewer)
+                .Select(v => new RunVerdict(
+                    v.StageId,
+                    v.Round,
+                    v.Reviewer,
+                    v.Decision,
+                    v.Summary,
+                    VerdictFindingsSerializer.Deserialize(v.FindingsJson),
+                    v.Model,
+                    v.Attempts,
+                    v.CreatedAt)),
+        ];
     }
 
     private static bool IsShortId(string value) =>

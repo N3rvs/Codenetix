@@ -33,6 +33,17 @@ public enum FailureReason
     StageError,
 }
 
+/// <summary>Tipo de Etapa de una Ejecución en <c>run_stages</c> (AD-11).</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<StageKind>))]
+public enum StageKind
+{
+    Analysis,
+    Coding,
+    Testing,
+    Review,
+    Decision,
+}
+
 public static class RunStateExtensions
 {
     /// <summary><c>PullRequestCreated</c>, <c>Failed</c> y <c>Cancelled</c>: de ellos no se sale.</summary>
@@ -62,12 +73,18 @@ public static class RunStateExtensions
 [JsonDerivedType(typeof(OutputAppended), nameof(OutputAppended))]
 [JsonDerivedType(typeof(OutputTruncated), nameof(OutputTruncated))]
 [JsonDerivedType(typeof(CodingAttemptFailed), nameof(CodingAttemptFailed))]
+[JsonDerivedType(typeof(ReviewerOutputRejected), nameof(ReviewerOutputRejected))]
+[JsonDerivedType(typeof(VerdictRecorded), nameof(VerdictRecorded))]
 public abstract record RunEvent
 {
     /// <summary>Monotónico por Ejecución, empieza en 1 y no tiene huecos.</summary>
     public long Seq { get; init; }
 
     public Guid RunId { get; init; }
+
+    /// <summary>Identificador de la Etapa que produjo el evento (<c>run_stages.id</c>), si aplica.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Guid? StageId { get; init; }
 
     /// <summary>Instante UTC.</summary>
     public DateTimeOffset At { get; init; }
@@ -133,6 +150,12 @@ public sealed record OutputTruncated(int MaxBytes = OutputTruncated.DefaultMaxBy
 /// <summary>El intento <see cref="Attempt"/> del Programador ha fallado por <see cref="Reason"/> (FR-11).</summary>
 public sealed record CodingAttemptFailed(int Attempt, string Reason) : RunEvent;
 
+/// <summary>Un Revisor ha rechazado su salida número <see cref="Attempt"/> (esquema o reglas del Veredicto).</summary>
+public sealed record ReviewerOutputRejected(int Round, ReviewerKind Reviewer, int Attempt, string Error) : RunEvent;
+
+/// <summary>Veredicto persistido en <c>run_verdicts</c> para un Revisor en una Ronda (AD-11, FR-15).</summary>
+public sealed record VerdictRecorded(int Round, ReviewerKind Reviewer, VerdictDecision Decision, int FindingCount, string Model) : RunEvent;
+
 /// <summary>
 /// Único punto de escritura de <c>run_events</c> (AD-3), implementado solo por Pipeline. Aplica
 /// <see cref="ISecretRedactor"/> y asigna <see cref="RunEvent.Seq"/>; los productores no redactan.
@@ -172,4 +195,7 @@ public interface IRunReader
 
     /// <summary>El último <see cref="TestReport"/> de la Ejecución (<c>run_test_reports</c>), o <c>null</c> si todavía no hay.</summary>
     Task<TestReport?> GetTestReportAsync(Guid runId, CancellationToken cancellationToken);
+
+    /// <summary>Veredictos persistidos de la Ejecución (<c>run_verdicts</c>), ordenados por ronda y revisor.</summary>
+    Task<IReadOnlyList<RunVerdict>> GetVerdictsAsync(Guid runId, CancellationToken cancellationToken);
 }

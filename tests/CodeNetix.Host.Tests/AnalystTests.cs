@@ -62,7 +62,7 @@ public sealed partial class AnalystTests : IDisposable
         Assert.Equal("Failed", run.State);
         Assert.Equal("StageError", run.FailureReason);
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        Assert.Equal("Revisión no disponible", run.FailureDetail);
+        Assert.Equal("Rondas de revisión no disponibles", run.FailureDetail);
 
         // GET /api/runs/<id> incluye la Spec.
         var spec = run.Json.GetProperty("spec");
@@ -75,7 +75,11 @@ public sealed partial class AnalystTests : IDisposable
 
         var events = Events(run);
         Assert.Equal(
-            ["RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged", "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged", "SandboxReleased"],
+            [
+                "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
+                "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "SandboxReleased",
+            ],
             events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal(1, events[6].GetProperty("attempts").GetInt32());
         Assert.Equal(AgentEndpointResolver.AnthropicDefaultModel, events[6].GetProperty("model").GetString());
@@ -94,10 +98,10 @@ public sealed partial class AnalystTests : IDisposable
         Assert.InRange(reader.GetInt64(3), DateTimeOffset.UtcNow.AddMinutes(-5).UtcTicks, DateTimeOffset.UtcNow.UtcTicks);
 
         // El Analista recibió los archivos del repositorio (git ls-files) y la configuración por defecto.
-        var call = Assert.Single(factory.ChatClient.Calls);
+        var call = factory.ChatClient.Calls[0];
         Assert.Contains("README.md", call.Messages[1].Text, StringComparison.Ordinal);
         Assert.Contains("**/Migrations/**", call.Messages[1].Text, StringComparison.Ordinal);
-        var created = Assert.Single(factory.ChatClientFactory.Created);
+        var created = factory.ChatClientFactory.Created[0];
         Assert.Equal(AgentEndpointResolver.Anthropic, created.Endpoint.Provider);
         Assert.Equal(new Uri(AgentEndpointResolver.AnthropicBaseUrl), created.Endpoint.BaseUrl);
         Assert.True(created.Endpoint.StructuredOutput);
@@ -250,7 +254,7 @@ public sealed partial class AnalystTests : IDisposable
 
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
         Assert.Equal(JsonValueKind.Object, run.Json.GetProperty("spec").ValueKind);
-        var call = Assert.Single(factory.ChatClient.Calls);
+        var call = factory.ChatClient.Calls[0];
         Assert.Null(call.Options!.ResponseFormat);
         Assert.Contains("JSON Schema", call.Messages[0].Text, StringComparison.Ordinal);
     }
@@ -329,7 +333,7 @@ public sealed partial class AnalystTests : IDisposable
         var run = await RunToTerminalAsync(client);
 
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        var call = Assert.Single(factory.ChatClient.Calls);
+        var call = factory.ChatClient.Calls[0];
         var (systemRole, system) = call.Messages[0];
         Assert.Equal(ChatRole.System, systemRole);
         Assert.DoesNotContain("ignore previous instructions", system, StringComparison.OrdinalIgnoreCase);
@@ -376,7 +380,7 @@ public sealed partial class AnalystTests : IDisposable
         var run = await RunToTerminalAsync(client);
 
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        var user = Assert.Single(factory.ChatClient.Calls).Messages[1].Text;
+        var user = factory.ChatClient.Calls[0].Messages[1].Text;
         Assert.Equal(string.Empty, DataBlock().Matches(user).Single(m => m.Groups["label"].Value == "issue-body").Groups["content"].Value);
     }
 
@@ -397,7 +401,7 @@ public sealed partial class AnalystTests : IDisposable
         var run = await RunToTerminalAsync(client, "acme", "withmodel");
 
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        Assert.Equal("claude-haiku-test", Assert.Single(factory.ChatClientFactory.Created).Model);
+        Assert.Equal("claude-haiku-test", factory.ChatClientFactory.Created[0].Model);
         Assert.Equal("claude-haiku-test", Events(run).Single(e => e.GetProperty("type").GetString() == "SpecGenerated").GetProperty("model").GetString());
         Assert.Contains("src/App.cs", factory.ChatClient.Calls[0].Messages[1].Text, StringComparison.Ordinal);
     }
@@ -489,7 +493,7 @@ public sealed partial class AnalystTests : IDisposable
         Assert.Equal(JsonValueKind.Object, run.Json.GetProperty("spec").ValueKind);
         Assert.Equal("local-model", Events(run).Single(e => e.GetProperty("type").GetString() == "SpecGenerated").GetProperty("model").GetString());
 
-        var request = Assert.Single(server.Requests);
+        var request = server.Requests[0];
         Assert.Equal("/v1/chat/completions", request.PathAndQuery);
         Assert.Equal("Bearer " + LocalKey, request.Headers["Authorization"]);
         Assert.Single(request.Headers.Values, v => v.Contains(LocalKey, StringComparison.Ordinal));

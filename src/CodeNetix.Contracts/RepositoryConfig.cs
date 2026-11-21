@@ -89,6 +89,14 @@ public interface IRepositoryWorkspace
     /// </summary>
     Task ExportTreeAsync(Guid runId, Stream destination, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Sincroniza el árbol exportado del Sandbox (<paramref name="workspaceTar"/>) en el clon del host de
+    /// <paramref name="runId"/> (excluyendo <c>.git</c>, <c>bin/</c> y <c>obj/</c>) y calcula el diff unificado contra
+    /// <paramref name="baseSha"/> incluyendo archivos nuevos (AD-8). Lanza <see cref="RepositoryPreparationException"/>
+    /// si el árbol no existe, el tar es inválido o git falla.
+    /// </summary>
+    Task<DiffResult> ComputeDiffAsync(Guid runId, Stream workspaceTar, string baseSha, CancellationToken cancellationToken);
+
     /// <summary>Borra el árbol de trabajo de <paramref name="runId"/> (no falla si no existe).</summary>
     Task DeleteAsync(Guid runId, CancellationToken cancellationToken);
 }

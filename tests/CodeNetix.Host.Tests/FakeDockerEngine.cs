@@ -59,6 +59,9 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
 
     public int ExecExitCode { get; set; }
 
+    /// <summary>Bytes devueltos por <c>GET /containers/{id}/archive</c>.</summary>
+    public byte[] GetArchiveBytes { get; set; } = [];
+
     public IReadOnlyList<Request> Requests => [.. _requests];
 
     public static async Task<FakeDockerEngine> StartAsync()
@@ -202,6 +205,16 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
 
             case ("PUT", _) when path.EndsWith("/archive", StringComparison.Ordinal):
                 context.Response.StatusCode = 200;
+                return;
+
+            case ("GET", _) when path.EndsWith("/archive", StringComparison.Ordinal):
+                context.Response.StatusCode = 200;
+                context.Response.ContentType = "application/x-tar";
+                if (GetArchiveBytes.Length > 0)
+                {
+                    await context.Response.Body.WriteAsync(GetArchiveBytes);
+                }
+
                 return;
 
             case ("POST", _) when path.EndsWith("/start", StringComparison.Ordinal) && path.StartsWith("/containers/", StringComparison.Ordinal):

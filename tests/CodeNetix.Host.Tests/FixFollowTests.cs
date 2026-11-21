@@ -222,7 +222,7 @@ public sealed class FixFollowTests : IDisposable
         Assert.Matches(new Regex("^Evento [0-9a-f-]{36} registrado\\.$"), lines[0]);
         Assert.Matches(new Regex("^Ejecución [0-9a-f-]{36}:$"), lines[1]);
         var events = lines.Skip(2).ToList();
-        Assert.Equal(10, events.Count);
+        Assert.Equal(14, events.Count);
         Assert.Equal("[1] RunCreated github:o/r#12", events[0]);
         Assert.Equal("[2] StateChanged → Received", events[1]);
         Assert.Matches(new Regex("^\\[3\\] RepositoryPrepared [0-9a-f]{40}$"), events[2]);
@@ -232,7 +232,11 @@ public sealed class FixFollowTests : IDisposable
         Assert.Equal("[7] SpecGenerated claude-sonnet-5-5 (1 intento(s))", events[6]);
         Assert.Equal("[8] StateChanged Analyzing → Coding", events[7]);
         Assert.Equal("[9] OutputAppended", events[8]);
-        Assert.Equal("[10] StateChanged Coding → Failed (StageError: Revisión no disponible)", events[9]);
+        Assert.Equal("[10] StateChanged Coding → Reviewing", events[9]);
+        Assert.Equal("[11] VerdictRecorded ronda 1 security → approved (0 hallazgo(s))", events[10]);
+        Assert.Equal("[12] VerdictRecorded ronda 1 quality → approved (0 hallazgo(s))", events[11]);
+        Assert.Equal("[13] VerdictRecorded ronda 1 tests → approved (0 hallazgo(s))", events[12]);
+        Assert.Equal("[14] StateChanged Reviewing → Failed (StageError: Rondas de revisión no disponibles)", events[13]);
         Assert.Empty(_stderr.ToString());
     }
 

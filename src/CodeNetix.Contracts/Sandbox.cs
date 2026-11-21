@@ -47,6 +47,13 @@ public interface ISandboxSession : IAsyncDisposable
     Task<bool> HasChangesAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Exporta el árbol actual de <c>/workspace</c> como tar en <paramref name="destination"/>
+    /// (<c>GET /containers/{id}/archive?path=/workspace</c>, AD-8). Lanza <see cref="SandboxUnavailableException"/>
+    /// si el Sandbox está detenido o Docker falla.
+    /// </summary>
+    Task ExportWorkspaceAsync(Stream destination, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Detiene el contenedor: <c>stop</c> con 10 s de gracia y, si sigue vivo, <c>kill</c>. Idempotente; nunca lanza.
     /// </summary>
     Task StopAsync();
