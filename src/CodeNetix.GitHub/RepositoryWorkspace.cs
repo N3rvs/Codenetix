@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Formats.Tar;
 using System.Text;
 using CodeNetix.Contracts;
 using Microsoft.Extensions.Logging;
@@ -102,6 +103,306 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         if (result.TimedOut || result.ExitCode != 0)
         {
             throw new RepositoryPreparationException($"git archive ha fallado: {Reason(result, token: null)}");
+        }
+    }
+
+    /// <summary>Límite máximo de bytes extraídos desde el tar del Sandbox (256 MiB).</summary>
+    private const long MaxWorkspaceTarBytes = 256L * 1024 * 1024;
+
+    /// <summary>Límite máximo de entradas en el tar del Sandbox.</summary>
+    private const int MaxWorkspaceTarEntries = 50_000;
+
+    public async Task<DiffResult> ComputeDiffAsync(Guid runId, Stream workspaceTar, string baseSha, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(workspaceTar);
+        if (string.IsNullOrWhiteSpace(baseSha) || !IsSha(baseSha.Trim()))
+        {
+            throw new RepositoryPreparationException("el commit base para calcular el diff no es válido");
+        }
+
+        var normalizedBaseSha = baseSha.Trim();
+        var path = WorkspacePathOf(runId);
+        if (!Directory.Exists(path))
+        {
+            throw new RepositoryPreparationException("el árbol de trabajo de la Ejecución no existe");
+        }
+
+        var trackedOutput = await RunCheckedAsync(path, ["ls-tree", "-r", "--name-only", "-z", normalizedBaseSha], token: null, cancellationToken).ConfigureAwait(false);
+        var trackedFiles = new HashSet<string>(trackedOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+
+        await SyncWorkspaceTarAsync(path, workspaceTar, trackedFiles, cancellationToken).ConfigureAwait(false);
+
+        var tempIndex = Path.Combine(Path.GetTempPath(), $"codenetix-index-{runId:N}-{Guid.NewGuid():N}");
+        var gitEnv = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["GIT_INDEX_FILE"] = tempIndex,
+        };
+
+        try
+        {
+            await RunCheckedAsync(path, ["read-tree", normalizedBaseSha], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
+            await RunCheckedAsync(path, ["add", "-N", "--all"], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
+
+            var diff = await RunCheckedAsync(path, ["diff", "--no-ext-diff", normalizedBaseSha], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
+            var changedRaw = await RunCheckedAsync(path, ["diff", "--no-ext-diff", "--name-only", "-z", normalizedBaseSha], token: null, cancellationToken, gitEnv).ConfigureAwait(false);
+            var changedFiles = changedRaw.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+
+            return new DiffResult(diff, [.. changedFiles]);
+        }
+        finally
+        {
+            try
+            {
+                if (File.Exists(tempIndex))
+                {
+                    File.Delete(tempIndex);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Limpieza de mejor esfuerzo del índice temporal.
+            }
+        }
+    }
+
+    private static async Task SyncWorkspaceTarAsync(
+        string workspaceRoot,
+        Stream workspaceTar,
+        IReadOnlySet<string> trackedFiles,
+        CancellationToken cancellationToken)
+    {
+        if (workspaceTar.CanSeek && workspaceTar.Length - workspaceTar.Position == 0)
+        {
+            return;
+        }
+
+        var fullRoot = Path.GetFullPath(workspaceRoot);
+        var fullRootPrefix = fullRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? fullRoot
+            : fullRoot + Path.DirectorySeparatorChar;
+
+        bool? stripWorkspacePrefix = null;
+        var clearedExisting = false;
+        var entryCount = 0;
+        long totalBytes = 0;
+        var buffer = new byte[81920];
+
+        try
+        {
+            await using var reader = new TarReader(workspaceTar, leaveOpen: true);
+            TarEntry? entry;
+            while ((entry = await reader.GetNextEntryAsync(copyData: false, cancellationToken).ConfigureAwait(false)) is not null)
+            {
+                if (++entryCount > MaxWorkspaceTarEntries)
+                {
+                    throw new RepositoryPreparationException($"el tar del Sandbox supera el límite máximo de {MaxWorkspaceTarEntries} entradas");
+                }
+
+                // Ignorar metadatos PAX (p. ej. GlobalExtendedAttributes), enlaces y tipos especiales antes de evaluar el prefijo.
+                if (entry.EntryType is not (TarEntryType.Directory or TarEntryType.RegularFile or TarEntryType.V7RegularFile))
+                {
+                    continue;
+                }
+
+                if (!clearedExisting)
+                {
+                    ClearWorkingTreeExceptGit(fullRoot);
+                    clearedExisting = true;
+                }
+
+                var rawName = entry.Name.Replace('\\', '/');
+                while (rawName.StartsWith("./", StringComparison.Ordinal))
+                {
+                    rawName = rawName[2..];
+                }
+
+                rawName = rawName.TrimStart('/').TrimEnd('/');
+                if (rawName.Length == 0 || rawName == ".")
+                {
+                    continue;
+                }
+
+                stripWorkspacePrefix ??= rawName.Equals("workspace", StringComparison.Ordinal)
+                    || rawName.StartsWith("workspace/", StringComparison.Ordinal);
+
+                var relative = rawName;
+                if (stripWorkspacePrefix.Value)
+                {
+                    if (relative.Equals("workspace", StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    if (relative.StartsWith("workspace/", StringComparison.Ordinal))
+                    {
+                        relative = relative["workspace/".Length..];
+                    }
+                }
+
+                if (relative.Length == 0)
+                {
+                    continue;
+                }
+
+                if (IsPathTraversalOrUnsafe(relative))
+                {
+                    throw new RepositoryPreparationException("el archivo tar del Sandbox contiene una ruta no segura");
+                }
+
+                if (IsExcludedWorkspacePath(relative, entry.EntryType == TarEntryType.Directory, trackedFiles))
+                {
+                    continue;
+                }
+
+                var destinationPath = Path.GetFullPath(Path.Combine(fullRoot, relative.Replace('/', Path.DirectorySeparatorChar)));
+                if (!destinationPath.StartsWith(fullRootPrefix, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                {
+                    throw new RepositoryPreparationException("el archivo tar del Sandbox intenta escribir fuera del árbol de trabajo");
+                }
+
+                if (entry.EntryType == TarEntryType.Directory)
+                {
+                    Directory.CreateDirectory(destinationPath);
+                }
+                else
+                {
+                    var parent = Path.GetDirectoryName(destinationPath);
+                    if (!string.IsNullOrEmpty(parent))
+                    {
+                        Directory.CreateDirectory(parent);
+                    }
+
+                    await using var fileStream = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                    if (entry.DataStream is not null)
+                    {
+                        int read;
+                        while ((read = await entry.DataStream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                        {
+                            totalBytes += read;
+                            if (totalBytes > MaxWorkspaceTarBytes)
+                            {
+                                throw new RepositoryPreparationException($"el árbol exportado del Sandbox supera el límite máximo de {MaxWorkspaceTarBytes / (1024 * 1024)} MiB");
+                            }
+
+                            await fileStream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                }
+            }
+        }
+        catch (RepositoryPreparationException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or EndOfStreamException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            throw new RepositoryPreparationException($"no se ha podido leer el tar del Sandbox: {ex.Message}", ex);
+        }
+    }
+
+    private static bool IsPathTraversalOrUnsafe(string relativePath)
+    {
+        if (relativePath[0] is '/' or '\\' or '~'
+            || relativePath.Contains(':', StringComparison.Ordinal)
+            || relativePath.Any(char.IsControl))
+        {
+            return true;
+        }
+
+        foreach (var segment in relativePath.Split('/'))
+        {
+            // En Windows, segmentos terminados en '.' o espacio son normalizados por el FS (p. ej. ".git." → ".git").
+            if (segment.Length == 0 || segment[^1] is '.' or ' ')
+            {
+                return true;
+            }
+
+            var normalized = segment.TrimEnd('.', ' ');
+            if (normalized.Length == 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsExcludedWorkspacePath(string relativePath, bool isDirectory, IReadOnlySet<string> trackedFiles)
+    {
+        var hasBuildArtifactSegment = false;
+        foreach (var segment in relativePath.Split('/'))
+        {
+            var normalized = segment.TrimEnd('.', ' ');
+            if (string.Equals(normalized, ".git", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (string.Equals(segment, "bin", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(segment, "obj", StringComparison.OrdinalIgnoreCase))
+            {
+                hasBuildArtifactSegment = true;
+            }
+        }
+
+        if (!hasBuildArtifactSegment)
+        {
+            return false;
+        }
+
+        // Conservar archivos/directorios bajo bin/ u obj/ que ya estaban versionados en BaseSha.
+        if (trackedFiles.Contains(relativePath))
+        {
+            return false;
+        }
+
+        if (isDirectory)
+        {
+            var prefix = relativePath + "/";
+            foreach (var tracked in trackedFiles)
+            {
+                if (tracked.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private static void ClearWorkingTreeExceptGit(string workspaceRoot)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(workspaceRoot))
+        {
+            var name = Path.GetFileName(entry);
+            if (string.Equals(name, ".git", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (Directory.Exists(entry))
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    var enumeration = new EnumerationOptions { RecurseSubdirectories = true, AttributesToSkip = FileAttributes.ReparsePoint };
+                    foreach (var file in Directory.EnumerateFiles(entry, "*", enumeration))
+                    {
+                        File.SetAttributes(file, FileAttributes.Normal);
+                    }
+                }
+
+                Directory.Delete(entry, recursive: true);
+            }
+            else if (File.Exists(entry))
+            {
+                if (OperatingSystem.IsWindows())
+                {
+                    File.SetAttributes(entry, FileAttributes.Normal);
+                }
+
+                File.Delete(entry);
+            }
         }
     }
 
@@ -228,9 +529,14 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         return await RunCheckedAsync(path, ["show", $"{baseSha}:{RepoConfigFileName}"], token, cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task<string> RunCheckedAsync(string workingDirectory, IReadOnlyList<string> arguments, string? token, CancellationToken cancellationToken)
+    private async Task<string> RunCheckedAsync(
+        string workingDirectory,
+        IReadOnlyList<string> arguments,
+        string? token,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? extraEnvironment = null)
     {
-        var result = await RunGitAsync(workingDirectory, arguments, token: null, CommandTimeout, cancellationToken).ConfigureAwait(false);
+        var result = await RunGitAsync(workingDirectory, arguments, token: null, CommandTimeout, cancellationToken, extraEnvironment).ConfigureAwait(false);
         if (result.TimedOut || result.ExitCode != 0)
         {
             throw new RepositoryPreparationException($"git {arguments[0]} ha fallado: {Reason(result, token)}");
@@ -249,9 +555,10 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         IReadOnlyList<string> arguments,
         string? token,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? extraEnvironment = null)
     {
-        using var process = StartGit(workingDirectory, arguments, token, binaryOutput: false);
+        using var process = StartGit(workingDirectory, arguments, token, binaryOutput: false, extraEnvironment);
         var stdout = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
         var stderr = process.StandardError.ReadToEndAsync(CancellationToken.None);
 
@@ -336,7 +643,12 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
     /// Arranca <c>git</c> con un entorno limpio (ver <see cref="RunGitAsync"/>). Con <paramref name="binaryOutput"/>,
     /// la salida estándar se lee como bytes (<c>BaseStream</c>).
     /// </summary>
-    private static Process StartGit(string? workingDirectory, IReadOnlyList<string> arguments, string? token, bool binaryOutput)
+    private static Process StartGit(
+        string? workingDirectory,
+        IReadOnlyList<string> arguments,
+        string? token,
+        bool binaryOutput,
+        IReadOnlyDictionary<string, string>? extraEnvironment = null)
     {
         var startInfo = new ProcessStartInfo("git")
         {
@@ -390,6 +702,14 @@ internal sealed partial class RepositoryWorkspace(IOptions<GitHubOptions> option
         {
             startInfo.Environment[$"GIT_CONFIG_KEY_{i}"] = config[i].Key;
             startInfo.Environment[$"GIT_CONFIG_VALUE_{i}"] = config[i].Value;
+        }
+
+        if (extraEnvironment is not null)
+        {
+            foreach (var (key, value) in extraEnvironment)
+            {
+                startInfo.Environment[key] = value;
+            }
         }
 
         var process = new Process { StartInfo = startInfo };

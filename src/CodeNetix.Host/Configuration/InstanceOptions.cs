@@ -42,9 +42,24 @@ internal sealed class AgentsInstanceOptions
 
     /// <summary><c>CODENETIX__Agents__Coder__*</c>.</summary>
     public AgentRoleInstanceOptions Coder { get; set; } = new();
+
+    /// <summary><c>CODENETIX__Agents__Reviewers__*</c> (general y overrides por especialidad).</summary>
+    public ReviewersInstanceOptions Reviewers { get; set; } = new();
 }
 
-internal sealed class AgentRoleInstanceOptions
+internal sealed class ReviewersInstanceOptions : AgentRoleInstanceOptions
+{
+    /// <summary><c>CODENETIX__Agents__Reviewers__Security__*</c>.</summary>
+    public AgentRoleInstanceOptions Security { get; set; } = new();
+
+    /// <summary><c>CODENETIX__Agents__Reviewers__Quality__*</c>.</summary>
+    public AgentRoleInstanceOptions Quality { get; set; } = new();
+
+    /// <summary><c>CODENETIX__Agents__Reviewers__Tests__*</c>.</summary>
+    public AgentRoleInstanceOptions Tests { get; set; } = new();
+}
+
+internal class AgentRoleInstanceOptions
 {
     /// <summary>
     /// <c>CODENETIX__Agents__&lt;Rol&gt;__Provider</c>: nombre de un Proveedor con key. Por defecto, el único con key,

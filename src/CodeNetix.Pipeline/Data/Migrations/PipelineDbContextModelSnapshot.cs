@@ -36,6 +36,10 @@ namespace CodeNetix.Pipeline.Data.Migrations
                         .HasColumnType("TEXT")
                         .HasColumnName("payload_json");
 
+                    b.Property<Guid?>("StageId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("stage_id");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasColumnType("TEXT")
@@ -153,6 +157,46 @@ namespace CodeNetix.Pipeline.Data.Migrations
                     b.ToTable("run_runs", (string)null);
                 });
 
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunStageRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<long?>("CompletedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("completed_at");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Reviewer")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reviewer");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("round");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<long>("StartedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("started_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run_stages");
+
+                    b.HasIndex("RunId", "Kind", "Round")
+                        .HasDatabaseName("ix_run_stages_run_kind_round");
+
+                    b.ToTable("run_stages", (string)null);
+                });
+
             modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunTestReportRecord", b =>
                 {
                     b.Property<Guid>("RunId")
@@ -190,6 +234,69 @@ namespace CodeNetix.Pipeline.Data.Migrations
                     b.ToTable("run_test_reports", (string)null);
                 });
 
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunVerdictRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("attempts");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Decision")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("decision");
+
+                    b.Property<string>("FindingsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("findings_json");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("model");
+
+                    b.Property<string>("Reviewer")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("reviewer");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("round");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<Guid>("StageId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("stage_id");
+
+                    b.Property<string>("Summary")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("summary");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run_verdicts");
+
+                    b.HasIndex("StageId");
+
+                    b.HasIndex("RunId", "Round", "Reviewer")
+                        .IsUnique()
+                        .HasDatabaseName("ux_run_verdicts_run_round_reviewer");
+
+                    b.ToTable("run_verdicts", (string)null);
+                });
+
             modelBuilder.Entity("CodeNetix.Pipeline.Data.RunEventRecord", b =>
                 {
                     b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
@@ -210,6 +317,16 @@ namespace CodeNetix.Pipeline.Data.Migrations
                         .HasConstraintName("fk_run_specs_run_runs");
                 });
 
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunStageRecord", b =>
+                {
+                    b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_stages_run_runs");
+                });
+
             modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunTestReportRecord", b =>
                 {
                     b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
@@ -218,6 +335,23 @@ namespace CodeNetix.Pipeline.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_run_test_reports_run_runs");
+                });
+
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunVerdictRecord", b =>
+                {
+                    b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_verdicts_run_runs");
+
+                    b.HasOne("CodeNetix.Pipeline.Domain.RunStageRecord", null)
+                        .WithMany()
+                        .HasForeignKey("StageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_verdicts_run_stages");
                 });
 #pragma warning restore 612, 618
         }

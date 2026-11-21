@@ -37,8 +37,10 @@ internal interface IRunOrchestrator
 /// <item>Paso 4 (<c>Coding</c>): captura la línea base con <see cref="ITestRunner.CaptureBaselineAsync"/>, ejecuta
 /// el Programador (<see cref="ICodingAgent"/>) y valida los cambios con <see cref="ITestRunner.RunAsync"/> reintentando
 /// con feedback hasta <c>EffectiveConfig.MaxCodingAttempts</c>. Al agotarlos, <c>Failed(TestsFailed)</c>.</item>
-/// <item>Puente provisional hasta la Épica 3: tras un <see cref="TestReport"/> aprobado, persiste el informe en
-/// <c>run_test_reports</c> y finaliza en <c>Failed(StageError, <see cref="Detail"/>)</c> ("Revisión no disponible").</item>
+/// <item>Paso 5 (<c>Reviewing</c>): exporta <c>/workspace</c>, calcula el diff contra <c>BaseSha</c>, crea una Etapa
+/// <c>Review</c> por Revisor activo y ejecuta los Revisores en paralelo persistiendo <c>run_verdicts</c> y
+/// <see cref="VerdictRecorded"/>. Puente provisional hasta la Historia 3.2: finaliza en
+/// <c>Failed(StageError, <see cref="Detail"/>)</c> ("Rondas de revisión no disponibles").</item>
 /// </list>
 /// Errores: clon o credenciales → <c>Failed(CloneFailed)</c>; YAML o esquema inválidos →
 /// <c>Failed(InvalidRepoConfig)</c> sin llamar a ningún agente. El árbol de trabajo se borra al terminar
@@ -52,14 +54,15 @@ internal sealed partial class RunOrchestrator(
     IAnalyst analyst,
     ICodingAgent coder,
     ITestRunner testRunner,
+    IReviewerAgent reviewer,
     IIssueNotifier notifier,
     IRunEventSink events,
     ISandboxManager sandboxes,
     IOptions<InstanceLimits> limits,
     ILogger<RunOrchestrator> logger) : IRunOrchestrator
 {
-    /// <summary>Detalle del puente provisional tras superar los tests (hasta que exista la Revisión, Épica 3).</summary>
-    public const string Detail = "Revisión no disponible";
+    /// <summary>Detalle del puente provisional tras persistir los Veredictos de la Ronda 1 (hasta la Historia 3.2).</summary>
+    public const string Detail = "Rondas de revisión no disponibles";
 
     public const string IssueUnreadablePrefix = "no se pudo leer la issue: ";
 
@@ -68,6 +71,8 @@ internal sealed partial class RunOrchestrator(
     public const string SandboxFailedPrefix = "no se pudo crear el Sandbox: ";
 
     public const string TestRunnerFailedPrefix = "error del Sandbox ejecutando tests: ";
+
+    public const string DiffFailedPrefix = "no se pudo calcular el diff: ";
 
     /// <summary>Longitud máxima del detalle de un fallo.</summary>
     public const int MaxDetailLength = 1000;
@@ -431,8 +436,7 @@ internal sealed partial class RunOrchestrator(
                         run.CompleteCodingAttempt();
                         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                        // Puente provisional hacia la Épica 3 (Revisión):
-                        await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+                        await ReviewAsync(context, run, sandbox, spec, report, config, round: 1, cancellationToken).ConfigureAwait(false);
                         return;
                     }
 
@@ -472,6 +476,159 @@ internal sealed partial class RunOrchestrator(
         {
             await FailAsync(context, run, FailureReason.TestsFailed, "reintentos agotados", cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// AD-8, AD-11, FR-14, FR-15: exporta <c>/workspace</c> desde el Sandbox, calcula el diff contra <c>BaseSha</c>
+    /// en el clon del host, entra en <c>Reviewing</c>, crea una Etapa <c>Review</c> por Revisor activo y ejecuta los
+    /// Revisores en paralelo. Persiste <c>run_verdicts</c> y emite <see cref="VerdictRecorded"/>.
+    /// </summary>
+    private async Task ReviewAsync(
+        PipelineDbContext context,
+        PipelineRun run,
+        ISandboxSession sandbox,
+        Spec spec,
+        TestReport testReport,
+        EffectiveConfig config,
+        int round,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(run.BaseSha))
+        {
+            await FailAsync(context, run, FailureReason.StageError, "la Ejecución no tiene BaseSha para calcular el diff", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        DiffResult diff;
+        try
+        {
+            var tarPath = Path.Combine(Path.GetTempPath(), $"codenetix-ws-export-{Guid.NewGuid():N}.tar");
+            await using var tarStream = new FileStream(
+                tarPath,
+                FileMode.CreateNew,
+                FileAccess.ReadWrite,
+                FileShare.None,
+                81920,
+                FileOptions.Asynchronous | FileOptions.DeleteOnClose);
+
+            await sandbox.ExportWorkspaceAsync(tarStream, cancellationToken).ConfigureAwait(false);
+            await tarStream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            tarStream.Position = 0;
+
+            diff = await workspace.ComputeDiffAsync(run.Id, tarStream, run.BaseSha, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is SandboxUnavailableException or RepositoryPreparationException or IOException)
+        {
+            await FailAsync(context, run, FailureReason.StageError, Truncate(DiffFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var boundedDiff = diff.Truncate(ReviewInput.MaxDiffLength);
+        var activeReviewers = (config.Reviewers.IsDefault || config.Reviewers.Length == 0
+            ? EffectiveConfig.DefaultReviewers
+            : config.Reviewers)
+            .Distinct()
+            .ToArray();
+
+        await log.AddTransitionAsync(context, run, run.StartReview(), cancellationToken).ConfigureAwait(false);
+
+        var stageStartedAt = log.UtcNow;
+        var stages = new List<(ReviewerKind Reviewer, RunStageRecord Stage)>(activeReviewers.Length);
+        foreach (var kind in activeReviewers)
+        {
+            var stage = new RunStageRecord
+            {
+                Id = Guid.CreateVersion7(stageStartedAt),
+                RunId = run.Id,
+                Kind = StageKind.Review,
+                Round = round,
+                Reviewer = kind,
+                StartedAt = stageStartedAt,
+            };
+            context.Stages.Add(stage);
+            stages.Add((kind, stage));
+        }
+
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        var tasks = stages.Select(item => RunReviewerSafeAsync(
+            new ReviewInput(run.Id, item.Stage.Id, round, item.Reviewer, spec, boundedDiff, testReport, config),
+            cancellationToken)).ToArray();
+
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        for (var i = 0; i < stages.Count; i++)
+        {
+            var (kind, stage) = stages[i];
+            var (reviewResult, completedAt) = results[i];
+            var redactedVerdict = RedactVerdict(reviewResult.Verdict);
+
+            stage.CompletedAt = completedAt;
+
+            context.Verdicts.Add(new RunVerdictRecord
+            {
+                Id = Guid.CreateVersion7(completedAt),
+                RunId = run.Id,
+                StageId = stage.Id,
+                Round = round,
+                Reviewer = kind,
+                Decision = redactedVerdict.Decision,
+                Summary = redactedVerdict.Summary,
+                FindingsJson = VerdictFindingsSerializer.Serialize(redactedVerdict.Findings),
+                Model = reviewResult.Model,
+                Attempts = reviewResult.Attempts,
+                CreatedAt = completedAt,
+            });
+
+            await log.AddAsync(
+                context,
+                run.Id,
+                new VerdictRecorded(round, kind, redactedVerdict.Decision, redactedVerdict.Findings.Length, reviewResult.Model),
+                cancellationToken,
+                stageId: stage.Id).ConfigureAwait(false);
+        }
+
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        // Puente provisional hacia la Historia 3.2 (Rondas de revisión):
+        await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<(ReviewResult Result, DateTimeOffset CompletedAt)> RunReviewerSafeAsync(ReviewInput input, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await reviewer.ReviewAsync(input, cancellationToken).ConfigureAwait(false);
+            return (result, log.UtcNow);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var detail = Truncate($"Error inesperado del Revisor {input.ReviewerKind}: {ex.Message}");
+            var fallback = new ReviewResult(
+                new Verdict(VerdictDecision.ChangesRequested, detail, []),
+                Attempts: 1,
+                Model: "error",
+                FallbackDueToError: true);
+            return (fallback, log.UtcNow);
+        }
+    }
+
+    private Verdict RedactVerdict(Verdict verdict)
+    {
+        var redactor = log.Redactor;
+        var summary = redactor.Redact(verdict.Summary);
+        var findings = verdict.Findings.Length == 0
+            ? verdict.Findings
+            : [.. verdict.Findings.Select(f => f with
+            {
+                File = redactor.Redact(f.File),
+                Message = redactor.Redact(f.Message),
+            })];
+        return verdict with { Summary = summary, Findings = findings };
     }
 
     private TestReport RedactTestReport(TestReport report)

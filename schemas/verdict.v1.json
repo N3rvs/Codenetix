@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenetix.dev/schemas/verdict.v1.json",
+  "title": "Verdict (v1)",
+  "description": "Independent review verdict produced by a CodeNetix Reviewer from the Spec, Diff and TestReport.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "summary", "findings"],
+  "properties": {
+    "decision": {
+      "description": "Review decision: approved, changes_requested, or rejected.",
+      "type": "string",
+      "enum": ["approved", "changes_requested", "rejected"]
+    },
+    "summary": {
+      "description": "Concise summary of the review verdict.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8000
+    },
+    "findings": {
+      "description": "Structured list of review findings (0 to 50).",
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["severity", "file", "line", "message"],
+        "properties": {
+          "severity": {
+            "description": "Severity level of the finding.",
+            "type": "string",
+            "enum": ["critical", "high", "medium", "low", "info"]
+          },
+          "file": {
+            "description": "Repository-relative file path using '/' without '..'.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "line": {
+            "description": "1-based line number in the file, or null if the finding applies to the whole file.",
+            "type": ["integer", "null"],
+            "minimum": 1
+          },
+          "message": {
+            "description": "Clear, actionable description of the finding.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000
+          }
+        }
+      }
+    }
+  }
+}

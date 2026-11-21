@@ -103,22 +103,38 @@ internal static class InstanceOptionsValidator
             reasons.Add(InvalidSandboxMaxLifetimeMinutes);
         }
 
-        // Proveedor, URL y modelo del Analista y del Programador (solo si hay alguna key: si no, ya falta la key).
+        // Proveedor, URL y modelo del Analista, del Programador y de los Revisores (solo si hay alguna key: si no, ya falta la key).
         var analystReasons = AgentEndpointResolver.ResolveAnalyst(options).Reasons;
         reasons.AddRange(analystReasons);
         if (analystReasons.Count == 0
             || !string.IsNullOrWhiteSpace(options.Agents?.Coder?.Provider)
             || !string.IsNullOrWhiteSpace(options.Agents?.Coder?.Model))
         {
-            foreach (var coderReason in AgentEndpointResolver.ResolveCoder(options).Reasons)
-            {
-                if (!reasons.Contains(coderReason, StringComparer.Ordinal))
-                {
-                    reasons.Add(coderReason);
-                }
-            }
+            AddDistinct(reasons, AgentEndpointResolver.ResolveCoder(options).Reasons);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.Agents?.Reviewers?.Provider)
+            || !string.IsNullOrWhiteSpace(options.Agents?.Reviewers?.Model))
+        {
+            AddDistinct(reasons, AgentEndpointResolver.ResolveReviewers(options).Reasons);
+        }
+
+        foreach (var kind in Enum.GetValues<CodeNetix.Contracts.ReviewerKind>())
+        {
+            AddDistinct(reasons, AgentEndpointResolver.ResolveReviewer(options, kind).Reasons);
         }
 
         return reasons;
+    }
+
+    private static void AddDistinct(List<string> target, IReadOnlyList<string> items)
+    {
+        foreach (var item in items)
+        {
+            if (!target.Contains(item, StringComparer.Ordinal))
+            {
+                target.Add(item);
+            }
+        }
     }
 }

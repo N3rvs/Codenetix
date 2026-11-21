@@ -1,3 +1,5 @@
+using CodeNetix.Contracts;
+
 namespace CodeNetix.Agents;
 
 /// <summary>
@@ -22,6 +24,23 @@ public sealed class AgentsOptions
 
     /// <summary>Proveedor y modelo del Programador; <c>null</c> si la configuración no es coherente (modo diagnóstico).</summary>
     public AgentEndpoint? Coder { get; set; }
+
+    /// <summary>Proveedor y modelo general de los Revisores (<c>CODENETIX__Agents__Reviewers__*</c>).</summary>
+    public AgentEndpoint? Reviewers { get; set; }
+
+    /// <summary>Overrides de Proveedor/modelo por especialidad (<c>CODENETIX__Agents__Reviewers__&lt;Kind&gt;__*</c>).</summary>
+    public Dictionary<ReviewerKind, AgentEndpoint> ReviewerOverrides { get; set; } = new();
+
+    /// <summary>Resuelve el endpoint para un Revisor: override por especialidad → <see cref="Reviewers"/> → <see cref="Analyst"/>.</summary>
+    public AgentEndpoint? ResolveReviewerEndpoint(ReviewerKind kind)
+    {
+        if (ReviewerOverrides.TryGetValue(kind, out var specific) && specific is not null)
+        {
+            return specific;
+        }
+
+        return Reviewers ?? Analyst;
+    }
 }
 
 /// <summary>Un Proveedor compatible con OpenAI ya resuelto para un rol.</summary>

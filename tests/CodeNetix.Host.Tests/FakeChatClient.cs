@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using CodeNetix.Agents;
 using CodeNetix.Agents.ChatClients;
+using CodeNetix.Contracts;
 using Microsoft.Extensions.AI;
 
 namespace CodeNetix.Host.Tests;
@@ -26,12 +27,30 @@ internal sealed class FakeChatClient : IChatClient
     /// <summary><see cref="ValidSpecJson"/> en el envoltorio de <c>schemas/analysis.v1.json</c> (respuesta por defecto).</summary>
     public static readonly string ValidAnalysisJson = SpecAnswer(ValidSpecJson);
 
+    /// <summary>Veredicto válido por defecto (<c>schemas/verdict.v1.json</c>).</summary>
+    public const string ValidVerdictJson =
+        """
+        {
+          "decision": "approved",
+          "summary": "Los cambios cumplen la Spec sin hallazgos bloqueantes.",
+          "findings": []
+        }
+        """;
+
     private readonly ConcurrentQueue<Func<CancellationToken, Task<string>>> _script = new();
     private readonly ConcurrentQueue<Call> _calls = new();
     private readonly string _defaultResponse;
+    private readonly string _defaultVerdictResponse;
 
     /// <param name="defaultResponse">Respuesta sin guion; por defecto <see cref="ValidAnalysisJson"/>.</param>
-    public FakeChatClient(string? defaultResponse = null) => _defaultResponse = defaultResponse ?? ValidAnalysisJson;
+    public FakeChatClient(string? defaultResponse = null, string? defaultVerdictResponse = null)
+    {
+        _defaultResponse = defaultResponse ?? ValidAnalysisJson;
+        _defaultVerdictResponse = defaultVerdictResponse ?? ValidVerdictJson;
+    }
+
+    /// <summary>Manejador dinámico opcional por llamada (cuando hay paralelismo o respuestas por especialidad).</summary>
+    public Func<Call, CancellationToken, Task<string>>? Handler { get; set; }
 
     /// <summary><c>{"outcome":"spec","spec":&lt;specJson&gt;}</c>.</summary>
     public static string SpecAnswer(string specJson) => $$"""{"outcome":"spec","spec":{{specJson}}}""";
@@ -73,9 +92,25 @@ internal sealed class FakeChatClient : IChatClient
 
     public async Task<ChatResponse> GetResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
     {
-        _calls.Enqueue(new Call([.. messages.Select(m => (m.Role, m.Text))], options));
-        var step = _script.TryDequeue(out var next) ? next : _ => Task.FromResult(_defaultResponse);
-        var text = await step(cancellationToken);
+        var call = new Call([.. messages.Select(m => (m.Role, m.Text))], options);
+        _calls.Enqueue(call);
+
+        string text;
+        if (Handler is not null)
+        {
+            text = await Handler(call, cancellationToken);
+        }
+        else if (_script.TryDequeue(out var next))
+        {
+            text = await next(cancellationToken);
+        }
+        else
+        {
+            var isVerdictCall = options?.ResponseFormat is ChatResponseFormatJson { SchemaName: VerdictSchema.Name }
+                || call.Messages.Any(m => m.Role == ChatRole.System && m.Text.Contains("Reviewer of CodeNetix", StringComparison.Ordinal));
+            text = isVerdictCall ? _defaultVerdictResponse : _defaultResponse;
+        }
+
         return new ChatResponse(new ChatMessage(ChatRole.Assistant, text));
     }
 

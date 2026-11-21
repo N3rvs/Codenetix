@@ -86,10 +86,14 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal(runId, root.GetProperty("runId").GetGuid());
         Assert.Equal("Failed", root.GetProperty("state").GetString());
         var events = root.GetProperty("events").EnumerateArray().ToList();
-        Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L], events.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(1, 15).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.All(events, e => Assert.Equal(runId, e.GetProperty("runId").GetGuid()));
         Assert.Equal(
-            ["RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged", "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged", "SandboxReleased"],
+            [
+                "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
+                "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "SandboxReleased",
+            ],
             events.Select(e => e.GetProperty("type").GetString()));
 
         Assert.Equal(eventId, events[0].GetProperty("eventId").GetGuid());
@@ -114,10 +118,13 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal("Coding", events[7].GetProperty("to").GetString());
 
         Assert.Equal("Coding", events[9].GetProperty("from").GetString());
-        Assert.Equal("Failed", events[9].GetProperty("to").GetString());
-        Assert.Equal("StageError", events[9].GetProperty("failureReason").GetString());
-        Assert.Equal(RunOrchestrator.Detail, events[9].GetProperty("detail").GetString());
-        Assert.True(events[9].GetProperty("at").GetDateTimeOffset() >= events[0].GetProperty("at").GetDateTimeOffset());
+        Assert.Equal("Reviewing", events[9].GetProperty("to").GetString());
+
+        Assert.Equal("Reviewing", events[13].GetProperty("from").GetString());
+        Assert.Equal("Failed", events[13].GetProperty("to").GetString());
+        Assert.Equal("StageError", events[13].GetProperty("failureReason").GetString());
+        Assert.Equal(RunOrchestrator.Detail, events[13].GetProperty("detail").GetString());
+        Assert.True(events[13].GetProperty("at").GetDateTimeOffset() >= events[0].GetProperty("at").GetDateTimeOffset());
 
 
 
@@ -156,7 +163,7 @@ public sealed class RunExecutionTests : IDisposable
             "SELECT COUNT(*) FROM run_runs r WHERE (SELECT COUNT(*) FROM run_events e WHERE e.run_id = r.id) <> (SELECT MAX(seq) FROM run_events e WHERE e.run_id = r.id) OR (SELECT MIN(seq) FROM run_events e WHERE e.run_id = r.id) <> 1;"));
         Assert.Equal(0L, await ScalarAsync(connection,
             "SELECT COUNT(*) FROM run_runs r WHERE NOT EXISTS (SELECT 1 FROM run_events e WHERE e.run_id = r.id AND e.type = 'StateChanged' AND json_extract(e.payload_json, '$.to') = r.state);"));
-        Assert.Equal(12L, await ScalarAsync(connection, "SELECT COUNT(*) FROM run_events WHERE type = 'StateChanged';")); // null→Received→Analyzing→Coding→Failed
+        Assert.Equal(15L, await ScalarAsync(connection, "SELECT COUNT(*) FROM run_events WHERE type = 'StateChanged';")); // null→Received→Analyzing→Coding→Reviewing→Failed
     }
 
     // --- Objeto ocupado / libre ----------------------------------------------------------
@@ -363,11 +370,11 @@ public sealed class RunExecutionTests : IDisposable
 
         var afterFour = await GetEventsAsync(client, run.ShortId, "?afterSeq=4");
         var all = await GetEventsAsync(client, run.RunId.ToString(), string.Empty);
-        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=11");
+        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=15");
 
-        Assert.Equal([5L, 6L, 7L, 8L, 9L, 10L, 11L], afterFour.Select(e => e.GetProperty("seq").GetInt64()));
-        Assert.Equal("Failed", afterFour[5].GetProperty("to").GetString());
-        Assert.Equal([1L, 2L, 3L, 4L, 5L, 6L, 7L, 8L, 9L, 10L, 11L], all.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(5, 11).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal("Failed", afterFour[9].GetProperty("to").GetString());
+        Assert.Equal(Enumerable.Range(1, 15).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.Empty(none);
 
         using var negative = await client.GetAsync($"/api/runs/{run.RunId}/events?afterSeq=-1", Ct);

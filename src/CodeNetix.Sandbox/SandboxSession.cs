@@ -91,6 +91,9 @@ internal sealed partial class SandboxSession : ISandboxSession
     /// <summary>Tiempo máximo del cálculo de la huella de <c>/workspace</c>.</summary>
     internal static readonly TimeSpan ManifestTimeout = TimeSpan.FromMinutes(5);
 
+    /// <summary>Tiempo máximo de exportación del tar de <c>/workspace</c>.</summary>
+    internal static readonly TimeSpan ExportTimeout = TimeSpan.FromMinutes(5);
+
     public async Task<bool> HasChangesAsync(CancellationToken cancellationToken)
     {
         var command = new SandboxCommand("sh", ["-c", WorkspaceManifest.Script])
@@ -106,6 +109,34 @@ internal sealed partial class SandboxSession : ISandboxSession
         }
 
         return !string.Equals(digest, BaseDigest, StringComparison.Ordinal);
+    }
+
+    public async Task ExportWorkspaceAsync(Stream destination, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (IsStopping || Volatile.Read(ref _disposed) == 1)
+        {
+            throw new SandboxUnavailableException("el Sandbox está detenido");
+        }
+
+        try
+        {
+            await _docker.GetArchiveAsync(ContainerId, SandboxManager.WorkspacePath, destination, ExportTimeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is DockerApiException or HttpRequestException or IOException or TimeoutException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("Exportación cancelada.", ex, cancellationToken);
+            }
+
+            throw new SandboxUnavailableException($"Docker ha fallado al exportar /workspace: {ex.Message}", ex);
+        }
     }
 
     /// <summary>Se ha pedido la parada (por cancelación, vida máxima, <see cref="StopAsync"/> o liberación).</summary>

@@ -5,6 +5,8 @@
     <EmbeddedResource Include="..\..\schemas\spec.v1.json" LogicalName="CodeNetix.Contracts.spec.v1.json" Link="Schemas\spec.v1.json" />
     <!-- Envoltorio de la salida del Analista (schemas/analysis.v1.json): spec o not_automatable; referencia spec.v1.json. -->
     <EmbeddedResource Include="..\..\schemas\analysis.v1.json" LogicalName="CodeNetix.Contracts.analysis.v1.json" Link="Schemas\analysis.v1.json" />
+    <!-- Esquema público del Veredicto (schemas/verdict.v1.json): salida estructurada de los Revisores. -->
+    <EmbeddedResource Include="..\..\schemas\verdict.v1.json" LogicalName="CodeNetix.Contracts.verdict.v1.json" Link="Schemas\verdict.v1.json" />
   </ItemGroup>
 
 </Project>
