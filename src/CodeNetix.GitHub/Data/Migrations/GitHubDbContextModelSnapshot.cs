@@ -66,6 +66,54 @@ namespace CodeNetix.GitHub.Data.Migrations
 
                     b.ToTable("gh_notifications", (string)null);
                 });
+
+            modelBuilder.Entity("CodeNetix.GitHub.Data.PullRequestRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BranchName")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("branch_name");
+
+                    b.Property<string>("CommitSha")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("commit_sha");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<long>("Number")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("number");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("title");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("url");
+
+                    b.HasKey("Id")
+                        .HasName("pk_gh_pull_requests");
+
+                    b.HasIndex("RunId")
+                        .IsUnique()
+                        .HasDatabaseName("ux_gh_pull_requests_run_id");
+
+                    b.ToTable("gh_pull_requests", (string)null);
+                });
 #pragma warning restore 612, 618
         }
     }

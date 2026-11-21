@@ -384,9 +384,9 @@ public sealed class TestRunnerTests : IDisposable
 
         var run = await SubmitAndWaitForTerminalAsync(client);
 
-        Assert.Equal("Failed", run.GetProperty("state").GetString());
-        Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("PullRequestCreated", run.GetProperty("state").GetString());
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureReason").ValueKind);
+        Assert.Equal(JsonValueKind.Null, run.GetProperty("failureDetail").ValueKind);
 
         // La línea base capturada se pasa intacta en cada intento
         Assert.Equal(3, observedBaselines.Count);

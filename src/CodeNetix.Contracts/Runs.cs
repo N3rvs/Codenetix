@@ -75,6 +75,7 @@ public static class RunStateExtensions
 [JsonDerivedType(typeof(CodingAttemptFailed), nameof(CodingAttemptFailed))]
 [JsonDerivedType(typeof(ReviewerOutputRejected), nameof(ReviewerOutputRejected))]
 [JsonDerivedType(typeof(VerdictRecorded), nameof(VerdictRecorded))]
+[JsonDerivedType(typeof(PullRequestOpened), nameof(PullRequestOpened))]
 public abstract record RunEvent
 {
     /// <summary>Monotónico por Ejecución, empieza en 1 y no tiene huecos.</summary>
@@ -155,6 +156,9 @@ public sealed record ReviewerOutputRejected(int Round, ReviewerKind Reviewer, in
 
 /// <summary>Veredicto persistido en <c>run_verdicts</c> para un Revisor en una Ronda (AD-11, FR-15).</summary>
 public sealed record VerdictRecorded(int Round, ReviewerKind Reviewer, VerdictDecision Decision, int FindingCount, string Model) : RunEvent;
+
+/// <summary>Pull Request abierto en GitHub y persistido en <c>gh_pull_requests</c> (FR-17, AD-8).</summary>
+public sealed record PullRequestOpened(long Number, string Url, string Branch, string CommitSha) : RunEvent;
 
 /// <summary>
 /// Único punto de escritura de <c>run_events</c> (AD-3), implementado solo por Pipeline. Aplica

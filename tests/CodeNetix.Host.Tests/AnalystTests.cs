@@ -59,10 +59,9 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal("Failed", run.State);
-        Assert.Equal("StageError", run.FailureReason);
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        Assert.Equal("Creación de PR no disponible", run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
+        Assert.Null(run.FailureReason);
+        Assert.Null(run.FailureDetail);
 
         // GET /api/runs/<id> incluye la Spec.
         var spec = run.Json.GetProperty("spec");
@@ -78,7 +77,8 @@ public sealed partial class AnalystTests : IDisposable
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
-                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "SandboxReleased",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "PullRequestOpened",
+                "StateChanged", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal(1, events[6].GetProperty("attempts").GetInt32());
@@ -130,7 +130,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         var events = Events(run);
         var rejected = Assert.Single(events, e => e.GetProperty("type").GetString() == "AnalystOutputRejected");
         Assert.Equal(1, rejected.GetProperty("attempt").GetInt32());
@@ -252,7 +252,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         Assert.Equal(JsonValueKind.Object, run.Json.GetProperty("spec").ValueKind);
         var call = factory.ChatClient.Calls[0];
         Assert.Null(call.Options!.ResponseFormat);
@@ -332,7 +332,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         var call = factory.ChatClient.Calls[0];
         var (systemRole, system) = call.Messages[0];
         Assert.Equal(ChatRole.System, systemRole);
@@ -379,7 +379,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         var user = factory.ChatClient.Calls[0].Messages[1].Text;
         Assert.Equal(string.Empty, DataBlock().Matches(user).Single(m => m.Groups["label"].Value == "issue-body").Groups["content"].Value);
     }
@@ -400,7 +400,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client, "acme", "withmodel");
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         Assert.Equal("claude-haiku-test", factory.ChatClientFactory.Created[0].Model);
         Assert.Equal("claude-haiku-test", Events(run).Single(e => e.GetProperty("type").GetString() == "SpecGenerated").GetProperty("model").GetString());
         Assert.Contains("src/App.cs", factory.ChatClient.Calls[0].Messages[1].Text, StringComparison.Ordinal);
@@ -489,7 +489,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         Assert.Equal(JsonValueKind.Object, run.Json.GetProperty("spec").ValueKind);
         Assert.Equal("local-model", Events(run).Single(e => e.GetProperty("type").GetString() == "SpecGenerated").GetProperty("model").GetString());
 
@@ -581,7 +581,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var run = await RunToTerminalAsync(client);
 
-        Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
+        Assert.Equal("PullRequestCreated", run.State);
         var rejected = Assert.Single(Events(run), e => e.GetProperty("type").GetString() == "AnalystOutputRejected");
         Assert.Equal("$.spec: propiedad no admitida", rejected.GetProperty("error").GetString());
         Assert.DoesNotContain(InjectedName, run.Json.GetRawText(), StringComparison.Ordinal);

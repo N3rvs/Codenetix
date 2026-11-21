@@ -18,7 +18,12 @@ internal static class GetRunEndpoint
         return endpoints;
     }
 
-    private static async Task<IResult> HandleAsync(HttpContext context, string id, IRunReader runs, CancellationToken cancellationToken)
+    private static async Task<IResult> HandleAsync(
+        HttpContext context,
+        string id,
+        IRunReader runs,
+        IPullRequestPublisher pullRequests,
+        CancellationToken cancellationToken)
     {
         var run = await runs.FindAsync(id, cancellationToken);
         if (run is null)
@@ -30,6 +35,7 @@ internal static class GetRunEndpoint
         var spec = await runs.GetSpecAsync(run.RunId, cancellationToken);
         var testReport = await runs.GetTestReportAsync(run.RunId, cancellationToken);
         var verdicts = await runs.GetVerdictsAsync(run.RunId, cancellationToken);
+        var pullRequest = await pullRequests.FindByRunAsync(run.RunId, cancellationToken);
         return Results.Ok(new RunResponse(
             run.RunId,
             run.ShortId,
@@ -43,6 +49,7 @@ internal static class GetRunEndpoint
             spec,
             testReport,
             verdicts,
+            pullRequest,
             events));
     }
 
@@ -66,4 +73,5 @@ internal sealed record RunResponse(
     Spec? Spec,
     TestReport? TestReport,
     IReadOnlyList<RunVerdict> Verdicts,
+    PullRequestInfo? PullRequest,
     IReadOnlyList<RunEvent> Events);

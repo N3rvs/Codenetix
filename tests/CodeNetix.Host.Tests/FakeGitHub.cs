@@ -136,6 +136,57 @@ internal sealed class FakeGitHub : IAsyncDisposable
                 var comment = AddComment(owner, repo, number, payload.RootElement.GetProperty("body").GetString()!, Login);
                 return Results.Json(new { id = comment.Id, html_url = comment.HtmlUrl, body = comment.Body, user = new { login = comment.Login } }, statusCode: StatusCodes.Status201Created);
             });
+
+            _app.MapPost(prefix + "/repos/{owner}/{repo}/pulls", async (HttpContext context, string owner, string repo) =>
+            {
+                Record(context, $"pr-post:{owner}/{repo}");
+                using var payload = await System.Text.Json.JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+                await DelayAsync(context);
+                if (PullRequestPostStatus != StatusCodes.Status201Created)
+                {
+                    AddRateLimitHeader(context);
+                    return Results.Json(new { message = "Validation Failed" }, statusCode: PullRequestPostStatus);
+                }
+
+                var root = payload.RootElement;
+                var title = root.GetProperty("title").GetString()!;
+                var head = root.GetProperty("head").GetString()!;
+                var baseBranch = root.GetProperty("base").GetString()!;
+                var body = root.TryGetProperty("body", out var bodyEl) && bodyEl.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? bodyEl.GetString()!
+                    : string.Empty;
+                var pr = AddPullRequest(owner, repo, title, head, baseBranch, body);
+                return Results.Json(
+                    new
+                    {
+                        number = pr.Number,
+                        html_url = pr.HtmlUrl,
+                        title = pr.Title,
+                        body = pr.Body,
+                        head = new { @ref = pr.Head },
+                        @base = new { @ref = pr.Base },
+                    },
+                    statusCode: StatusCodes.Status201Created);
+            });
+
+            _app.MapPost(prefix + "/repos/{owner}/{repo}/issues/{number}/labels", async (HttpContext context, string owner, string repo, string number) =>
+            {
+                Record(context, $"label-post:{owner}/{repo}#{number}");
+                using var payload = await System.Text.Json.JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+                await DelayAsync(context);
+                if (LabelPostStatus is < 200 or >= 300)
+                {
+                    AddRateLimitHeader(context);
+                    return Results.Json(new { message = "Forbidden" }, statusCode: LabelPostStatus);
+                }
+
+                var labels = payload.RootElement.GetProperty("labels")
+                    .EnumerateArray()
+                    .Select(e => e.GetString()!)
+                    .ToArray();
+                AddLabels(owner, repo, number, labels);
+                return Results.Json(labels.Select(l => new { name = l }), statusCode: LabelPostStatus);
+            });
         }
 
         // Cualquier otra ruta (p. ej. el protocolo HTTP de git en un clon): se registra y responde 404.
@@ -212,6 +263,62 @@ internal sealed class FakeGitHub : IAsyncDisposable
         _comments.GetOrAdd($"{owner}/{repo}#{number}", _ => []);
 
     internal sealed record FakeComment(long Id, string HtmlUrl, string Body, string Login);
+
+    private readonly ConcurrentDictionary<string, List<FakePullRequest>> _pullRequests = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, List<string>> _labels = new(StringComparer.Ordinal);
+    private long _nextPullRequestNumber = 100;
+
+    /// <summary>Respuesta de <c>POST /repos/{o}/{r}/pulls</c> (por defecto 201).</summary>
+    public int PullRequestPostStatus { get; set; } = StatusCodes.Status201Created;
+
+    /// <summary>Respuesta de <c>POST /repos/{o}/{r}/issues/{n}/labels</c> (por defecto 200).</summary>
+    public int LabelPostStatus { get; set; } = StatusCodes.Status200OK;
+
+    public int PullRequestPosts => _requests.Count(r => r.Kind.StartsWith("pr-post:", StringComparison.Ordinal));
+
+    public int LabelPosts => _requests.Count(r => r.Kind.StartsWith("label-post:", StringComparison.Ordinal));
+
+    public IReadOnlyList<FakePullRequest> PullRequestsOn(string owner, string repo)
+    {
+        var list = _pullRequests.GetOrAdd($"{owner}/{repo}", _ => []);
+        lock (list)
+        {
+            return [.. list];
+        }
+    }
+
+    public IReadOnlyList<string> LabelsOn(string owner, string repo, long number)
+    {
+        var list = _labels.GetOrAdd($"{owner}/{repo}#{number}", _ => []);
+        lock (list)
+        {
+            return [.. list];
+        }
+    }
+
+    private FakePullRequest AddPullRequest(string owner, string repo, string title, string head, string baseBranch, string body)
+    {
+        var number = Interlocked.Increment(ref _nextPullRequestNumber);
+        var pr = new FakePullRequest(number, $"https://github.com/{owner}/{repo}/pull/{number}", title, head, baseBranch, body);
+        var list = _pullRequests.GetOrAdd($"{owner}/{repo}", _ => []);
+        lock (list)
+        {
+            list.Add(pr);
+        }
+
+        return pr;
+    }
+
+    private void AddLabels(string owner, string repo, string number, IReadOnlyList<string> labels)
+    {
+        var list = _labels.GetOrAdd($"{owner}/{repo}#{number}", _ => []);
+        lock (list)
+        {
+            list.AddRange(labels);
+        }
+    }
+
+    internal sealed record FakePullRequest(long Number, string HtmlUrl, string Title, string Head, string Base, string Body);
 
     public string Login { get; set; } = DefaultLogin;
 

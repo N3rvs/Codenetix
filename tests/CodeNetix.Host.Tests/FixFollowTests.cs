@@ -217,12 +217,12 @@ public sealed class FixFollowTests : IDisposable
             Ct,
             TimeSpan.FromMilliseconds(50));
 
-        Assert.True(exitCode == CodeNetixCommandLine.ExitFailure, _stderr.ToString());
+        Assert.True(exitCode == CodeNetixCommandLine.ExitOk, _stderr.ToString());
         var lines = StdoutLines;
         Assert.Matches(new Regex("^Evento [0-9a-f-]{36} registrado\\.$"), lines[0]);
         Assert.Matches(new Regex("^Ejecución [0-9a-f-]{36}:$"), lines[1]);
         var events = lines.Skip(2).ToList();
-        Assert.Equal(14, events.Count);
+        Assert.Equal(16, events.Count);
         Assert.Equal("[1] RunCreated github:o/r#12", events[0]);
         Assert.Equal("[2] StateChanged → Received", events[1]);
         Assert.Matches(new Regex("^\\[3\\] RepositoryPrepared [0-9a-f]{40}$"), events[2]);
@@ -236,7 +236,9 @@ public sealed class FixFollowTests : IDisposable
         Assert.Equal("[11] VerdictRecorded ronda 1 security → approved (0 hallazgo(s))", events[10]);
         Assert.Equal("[12] VerdictRecorded ronda 1 quality → approved (0 hallazgo(s))", events[11]);
         Assert.Equal("[13] VerdictRecorded ronda 1 tests → approved (0 hallazgo(s))", events[12]);
-        Assert.Equal("[14] StateChanged Reviewing → Failed (StageError: Creación de PR no disponible)", events[13]);
+        Assert.Equal("[14] StateChanged Reviewing → Deciding", events[13]);
+        Assert.Matches(new Regex("^\\[15\\] PullRequestOpened #\\d+ https://github\\.com/o/r/pull/\\d+$"), events[14]);
+        Assert.Equal("[16] StateChanged Deciding → PullRequestCreated", events[15]);
         Assert.Empty(_stderr.ToString());
     }
 

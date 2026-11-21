@@ -42,10 +42,11 @@ internal interface IRunOrchestrator
 /// <item>Paso 5 (<c>Reviewing</c>): exporta <c>/workspace</c>, calcula el diff contra <c>BaseSha</c>, crea una Etapa
 /// <c>Review</c> por Revisor activo y ejecuta los Revisores en paralelo persistiendo <c>run_verdicts</c> y
 /// <see cref="VerdictRecorded"/>. Evalúa los Veredictos de la ronda: cualquier <c>Rejected</c> →
-/// <c>Failed(ReviewRejected)</c>; unanimidad <c>Approved</c> → puente provisional hacia la Historia 3.3
-/// (<c>Failed(StageError, <see cref="Detail"/>)</c> "Creación de PR no disponible"); <c>ChangesRequested</c> con rondas
-/// restantes → <c>Reviewing → Coding</c> (<see cref="PipelineRun.StartReviewRound"/>) pasando los hallazgos como
-/// feedback; rondas agotadas sin unanimidad → <c>Failed(ReviewRoundsExhausted)</c>.</item>
+/// <c>Failed(ReviewRejected)</c>; unanimidad <c>Approved</c> → <c>Reviewing → Deciding</c>, publica el PR vía
+/// <see cref="IPullRequestPublisher"/>, emite <see cref="PullRequestOpened"/> y transiciona a
+/// <c>PullRequestCreated</c>; <c>ChangesRequested</c> con rondas restantes → <c>Reviewing → Coding</c>
+/// (<see cref="PipelineRun.StartReviewRound"/>) pasando los hallazgos como feedback; rondas agotadas sin unanimidad →
+/// <c>Failed(ReviewRoundsExhausted)</c>.</item>
 /// </list>
 /// Errores: clon o credenciales → <c>Failed(CloneFailed)</c>; YAML o esquema inválidos →
 /// <c>Failed(InvalidRepoConfig)</c> sin llamar a ningún agente. El árbol de trabajo se borra al terminar
@@ -61,14 +62,12 @@ internal sealed partial class RunOrchestrator(
     ITestRunner testRunner,
     IReviewerAgent reviewer,
     IIssueNotifier notifier,
+    IPullRequestPublisher pullRequestPublisher,
     IRunEventSink events,
     ISandboxManager sandboxes,
     IOptions<InstanceLimits> limits,
     ILogger<RunOrchestrator> logger) : IRunOrchestrator
 {
-    /// <summary>Detalle del puente provisional tras aprobación unánime de Revisores (hasta la Historia 3.3).</summary>
-    public const string Detail = "Creación de PR no disponible";
-
     public const string IssueUnreadablePrefix = "no se pudo leer la issue: ";
 
     public const string ProviderErrorPrefix = "Proveedor: ";
@@ -78,6 +77,8 @@ internal sealed partial class RunOrchestrator(
     public const string TestRunnerFailedPrefix = "error del Sandbox ejecutando tests: ";
 
     public const string DiffFailedPrefix = "no se pudo calcular el diff: ";
+
+    public const string PullRequestFailedPrefix = "no se pudo publicar el PR: ";
 
     /// <summary>Longitud máxima del detalle de un fallo.</summary>
     public const int MaxDetailLength = 1000;
@@ -523,10 +524,10 @@ internal sealed partial class RunOrchestrator(
                 return;
             }
 
-            // 2. Unanimidad Approved → listo para Deciding (puente provisional hasta la Historia 3.3).
+            // 2. Unanimidad Approved → Deciding → crear commit único, push y abrir PR (FR-17, AD-8).
             if (roundVerdicts.Count > 0 && roundVerdicts.All(v => v.Verdict.Decision == VerdictDecision.Approved))
             {
-                await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+                await PublishPullRequestAsync(context, run, owner, repo, number, spec, passedReport, round, cancellationToken).ConfigureAwait(false);
                 return;
             }
 
@@ -856,6 +857,103 @@ internal sealed partial class RunOrchestrator(
 
     private static string NormalizeSingleLine(string value) =>
         string.Join(' ', value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+
+    /// <summary>
+    /// AD-16 paso 6 (FR-17, AD-8): transiciona <c>Reviewing → Deciding</c>, construye el cuerpo trazable redactado,
+    /// publica el PR vía <see cref="IPullRequestPublisher"/>, emite <see cref="PullRequestOpened"/> y transiciona
+    /// <c>Deciding → PullRequestCreated</c>. Ante error, transiciona <c>Deciding → Failed(StageError)</c>.
+    /// </summary>
+    private async Task PublishPullRequestAsync(
+        PipelineDbContext context,
+        PipelineRun run,
+        string owner,
+        string repo,
+        long issueNumber,
+        Spec spec,
+        TestReport testReport,
+        int round,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(run.BaseSha))
+        {
+            await FailAsync(context, run, FailureReason.StageError, "la Ejecución no tiene BaseSha para publicar el PR", cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await log.AddTransitionAsync(context, run, run.StartDeciding(), cancellationToken).ConfigureAwait(false);
+        var decisionStartedAt = log.UtcNow;
+        var decisionStage = new RunStageRecord
+        {
+            Id = Guid.CreateVersion7(decisionStartedAt),
+            RunId = run.Id,
+            Kind = StageKind.Decision,
+            Round = round,
+            Reviewer = null,
+            StartedAt = decisionStartedAt,
+        };
+        context.Stages.Add(decisionStage);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        var verdictRecords = await context.Verdicts
+            .AsNoTracking()
+            .Where(v => v.RunId == run.Id)
+            .OrderBy(v => v.Round)
+            .ThenBy(v => v.Reviewer)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var verdicts = verdictRecords
+            .Select(r => new RunVerdict(
+                r.StageId,
+                r.Round,
+                r.Reviewer,
+                r.Decision,
+                r.Summary,
+                VerdictFindingsSerializer.Deserialize(r.FindingsJson),
+                r.Model,
+                r.Attempts,
+                r.CreatedAt))
+            .ToArray();
+
+        var title = PullRequestBodyBuilder.BuildTitle(issueNumber, spec.Problem, log.Redactor);
+        var commitMessage = PullRequestBodyBuilder.BuildCommitMessage(run.Id, issueNumber, spec.Problem, log.Redactor);
+        var body = PullRequestBodyBuilder.BuildBody(
+            run.Id,
+            run.EventId,
+            owner,
+            repo,
+            issueNumber,
+            spec,
+            verdicts,
+            testReport,
+            log.Redactor,
+            costUsd: null);
+
+        var request = new PullRequestRequest(run.Id, owner, repo, run.BaseSha, title, body, commitMessage);
+
+        PullRequestInfo pr;
+        try
+        {
+            pr = await pullRequestPublisher.PublishAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is PullRequestPublishException or GitOperationBlockedException or RepositoryPreparationException or GitHubUnavailableException)
+        {
+            decisionStage.CompletedAt = log.UtcNow;
+            await FailAsync(context, run, FailureReason.StageError, Truncate(PullRequestFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        // Una vez creado el PR en GitHub, completar con CancellationToken.None para no dejar la Ejecución atascada en Deciding.
+        decisionStage.CompletedAt = log.UtcNow;
+        await log.AddAsync(
+            context,
+            run.Id,
+            new PullRequestOpened(pr.Number, pr.Url, pr.BranchName, pr.CommitSha),
+            CancellationToken.None,
+            stageId: decisionStage.Id).ConfigureAwait(false);
+        await log.AddTransitionAsync(context, run, run.CompletePullRequest(), CancellationToken.None).ConfigureAwait(false);
+        await context.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+    }
 
     private async Task FailAsync(PipelineDbContext context, PipelineRun run, FailureReason reason, string detail, CancellationToken cancellationToken)
     {

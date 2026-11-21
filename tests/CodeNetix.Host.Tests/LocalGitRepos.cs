@@ -29,11 +29,11 @@ internal sealed class LocalGitRepos : IDisposable
     public static LocalGitRepos Default => SharedDefault.Value;
 
     /// <summary>Crea <c>owner/repo</c> con <paramref name="files"/> en un único commit; devuelve el SHA.</summary>
-    public string Create(string owner, string repo, IReadOnlyDictionary<string, string>? files = null)
+    public string Create(string owner, string repo, IReadOnlyDictionary<string, string>? files = null, string defaultBranch = "main")
     {
         var path = PathOf(owner, repo);
         Directory.CreateDirectory(path);
-        Git(path, "init", "-q", "-b", "main");
+        Git(path, "init", "-q", "-b", defaultBranch);
         files ??= new Dictionary<string, string> { ["README.md"] = "# prueba\n" };
         foreach (var (name, content) in files)
         {
@@ -58,6 +58,26 @@ internal sealed class LocalGitRepos : IDisposable
     }
 
     public string PathOf(string owner, string repo) => Path.Combine(Root, owner, repo + ".git");
+
+    public IReadOnlyList<string> ListBranches(string owner, string repo) =>
+        Git(PathOf(owner, repo), "for-each-ref", "--format=%(refname:short)", "refs/heads")
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    public string BranchTip(string owner, string repo, string branch) =>
+        Git(PathOf(owner, repo), "rev-parse", "--verify", $"refs/heads/{branch}").Trim();
+
+    public int CommitCount(string owner, string repo, string fromRef, string toRef) =>
+        int.Parse(Git(PathOf(owner, repo), "rev-list", "--count", $"{fromRef}..{toRef}").Trim(), System.Globalization.CultureInfo.InvariantCulture);
+
+    public string ParentSha(string owner, string repo, string commitRef) =>
+        Git(PathOf(owner, repo), "rev-parse", "--verify", $"{commitRef}^").Trim();
+
+    public string ShowFile(string owner, string repo, string commitRef, string filePath) =>
+        Git(PathOf(owner, repo), "show", $"{commitRef}:{filePath}");
+
+    public IReadOnlyList<string> ListFilesInCommit(string owner, string repo, string commitRef) =>
+        Git(PathOf(owner, repo), "ls-tree", "-r", "--name-only", commitRef)
+            .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>Ejecuta git en <paramref name="workingDirectory"/> con identidad fija y sin configuración global.</summary>
     public static string Git(string workingDirectory, params string[] arguments)
