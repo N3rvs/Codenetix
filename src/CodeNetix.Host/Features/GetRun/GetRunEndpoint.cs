@@ -14,7 +14,10 @@ internal static class GetRunEndpoint
 
     public static IEndpointRouteBuilder MapGetRun(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet(Route, HandleAsync).WithName("GetRun");
+        endpoints.MapGet(Route, HandleAsync)
+            .WithName("GetRun")
+            .Produces<RunResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound);
         return endpoints;
     }
 

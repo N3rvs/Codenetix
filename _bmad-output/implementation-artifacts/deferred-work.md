@@ -11,6 +11,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-3-acceso-seguro-al-panel-y-la-api.md`
   summary: `AdminTokenMiddleware` solo acepta `Authorization: Bearer`; los clientes SignalR del navegador (WebSocket/SSE) envían el token como `access_token` en la query, así que `/hubs/**` será inaccesible desde el Panel.
   evidence: Limitación del navegador con WebSocket/SSE. Aceptar `access_token` solo en `/hubs/**` y asegurar que la query no llega en claro a los logs, como muy tarde en la historia 4.1 (primer hub). Severidad medium.
+  resolved: Historia 4.1 — `AdminTokenMiddleware` acepta `?access_token=<token>` únicamente en `/hubs/**` con comparación en tiempo constante (`FixedTimeEquals`) y sin exponer el token en logs ni respuestas de error.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-6-ejecucion-con-maquina-de-estados-visible.md`
   summary: `RunEventLog` redacta el JSON serializado completo; un secreto configurado que coincida con una clave o valor de enum ("type", "Failed"…) rompe el discriminador.

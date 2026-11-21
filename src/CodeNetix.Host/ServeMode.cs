@@ -7,8 +7,10 @@ using CodeNetix.Host.Features.GetEvent;
 using CodeNetix.Host.Features.GetHealth;
 using CodeNetix.Host.Features.GetRun;
 using CodeNetix.Host.Features.GetRunEvents;
+using CodeNetix.Host.Features.ListRuns;
 using CodeNetix.Host.Features.ReceiveWebhook;
 using CodeNetix.Host.Features.SubmitManualEvent;
+using CodeNetix.Host.Hubs;
 using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
 using CodeNetix.Persistence;
@@ -122,6 +124,9 @@ internal static class ServeMode
         builder.Services.AddSingleton<InstanceHealth>();
         builder.Services.AddSingleton<IInstanceHealth>(sp => sp.GetRequiredService<InstanceHealth>());
         builder.Services.AddSingleton<AdminTokenStore>();
+        builder.Services.AddSingleton<IRunEventPublisher, RunsHubEventPublisher>();
+        builder.Services.AddSignalR();
+        builder.Services.AddOpenApi();
         builder.Services.AddHostedService<StartupReconciler>();
         builder.Services.AddProblemDetails();
 
@@ -141,19 +146,26 @@ internal static class ServeMode
         app.UseDefaultFiles();
         app.UseStaticFiles();
 
+        app.MapOpenApi();
         app.MapGetHealth();
         app.MapReceiveWebhook();
         app.MapLlmGateway();
         app.MapSubmitManualEvent();
         app.MapGetEvent();
+        app.MapListRuns();
         app.MapGetRun();
         app.MapGetRunEvents();
+        app.MapHub<RunsHub>(RunsHub.Route);
 
-        // /api desconocido -> 404 (ProblemDetails), nunca index.html.
-        app.Map("/api/{**rest}", (HttpContext context) => Results.Problem(
+        // /api, /hubs y /openapi desconocidos -> 404 (ProblemDetails), nunca index.html.
+        static IResult NotFoundProblem(HttpContext context) => Results.Problem(
             statusCode: StatusCodes.Status404NotFound,
             title: "Recurso no encontrado",
-            instance: context.Request.Path));
+            instance: context.Request.Path);
+
+        app.Map("/api/{**rest}", NotFoundProblem).ExcludeFromDescription();
+        app.Map("/hubs/{**rest}", NotFoundProblem).ExcludeFromDescription();
+        app.Map("/openapi/{**rest}", NotFoundProblem).ExcludeFromDescription();
 
         // Rutas del Panel (SPA) -> index.html.
         app.MapFallbackToFile("index.html");

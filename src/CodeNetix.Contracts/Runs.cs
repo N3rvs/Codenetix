@@ -177,6 +177,17 @@ public interface IRunEventSink
     Task<RunEvent> AppendAsync(Guid runId, Guid? stageId, RunEvent payload, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Publicador de eventos confirmados en SQLite hacia suscriptores en vivo (AD-3).
+/// <c>CodeNetix.Pipeline</c> solo lo invoca después de <c>SaveChangesAsync</c>; un fallo al publicar
+/// nunca revierte ni interrumpe la Ejecución.
+/// </summary>
+public interface IRunEventPublisher
+{
+    /// <summary>Publica <paramref name="runEvent"/> ya confirmado en almacenamiento.</summary>
+    Task PublishAsync(RunEvent runEvent, CancellationToken cancellationToken);
+}
+
 /// <summary>Vista de lectura de una Ejecución.</summary>
 public sealed record RunSummary(
     Guid RunId,
@@ -192,6 +203,9 @@ public sealed record RunSummary(
 /// <summary>Consultas de lectura de Ejecuciones (implementadas por Pipeline).</summary>
 public interface IRunReader
 {
+    /// <summary>Ejecuciones recientes ordenadas por <c>CreatedAt</c> descendente (hasta <paramref name="limit"/>).</summary>
+    Task<IReadOnlyList<RunSummary>> ListRecentAsync(int limit, CancellationToken cancellationToken);
+
     /// <summary>Busca por GUID o por <c>shortId</c> (8 caracteres hexadecimales). <c>null</c> si no existe.</summary>
     Task<RunSummary?> FindAsync(string id, CancellationToken cancellationToken);
 

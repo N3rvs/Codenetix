@@ -93,7 +93,7 @@ internal sealed class RunDispatchHandler(
             await log.AddAsync(context, run.Id, initial, cancellationToken).ConfigureAwait(false);
             try
             {
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
             }
             catch (DbUpdateException ex) when (attempt < MaxAttempts && RunEventLog.IsUniqueViolation(ex))
             {

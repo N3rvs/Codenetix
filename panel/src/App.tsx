@@ -1,32 +1,624 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { HubConnectionBuilder, HubConnectionState, LogLevel } from '@microsoft/signalr'
+import {
+  Background,
+  Controls,
+  Handle,
+  Position,
+  ReactFlow,
+  type NodeProps,
+} from '@xyflow/react'
+import {
+  clearStoredToken,
+  fetchHealth,
+  fetchRunEvents,
+  fetchRuns,
+  loadStoredToken,
+  mergeRunEvents,
+  saveStoredToken,
+  UnauthorizedError,
+  type HealthInfo,
+} from './api/client'
+import type { RunEvent, RunState, RunSummary } from './api/generated'
+import {
+  buildPipelineGraph,
+  deriveCurrentState,
+  STATE_LABELS,
+  type PipelineFlowNode,
+} from './graph/buildPipelineGraph'
 
-// El contenedor debe llamarse "codenetix" para que funcione `docker exec codenetix …`.
-const runCommand =
-  'docker run --name codenetix -p 127.0.0.1:5000:5000 -v codenetix-data:/data … codenetix serve'
 const exampleCommand = 'docker exec codenetix codenetix fix <url-de-issue>'
 const retryDelayMs = 2000
 
-type HealthStatus = 'Starting' | 'Ready' | 'Diagnostic'
+type HealthViewState =
+  | { kind: 'loading' }
+  | { kind: 'error' }
+  | { kind: 'health'; health: HealthInfo }
 
-interface Health {
-  status: HealthStatus
-  reasons: string[]
+type HubStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
+
+function isSafeHttpUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return false
+  }
 }
 
-type ViewState = { kind: 'loading' } | { kind: 'error' } | { kind: 'health'; health: Health }
-
-async function fetchHealth(signal: AbortSignal): Promise<Health> {
-  const response = await fetch('/api/health', { signal, headers: { Accept: 'application/json' } })
-  // 503 (Starting) también trae el cuerpo con el estado.
-  const body = (await response.json()) as Partial<Health>
-  if (body.status !== 'Starting' && body.status !== 'Ready' && body.status !== 'Diagnostic') {
-    throw new Error('Respuesta de salud no reconocida')
+function isHubUnauthorizedError(err: unknown): boolean {
+  if (!err) return false
+  if (typeof err === 'object' && 'statusCode' in err && (err as { statusCode?: unknown }).statusCode === 401) {
+    return true
   }
-  return { status: body.status, reasons: Array.isArray(body.reasons) ? body.reasons : [] }
+  const text = err instanceof Error ? err.message : String(err)
+  return /\b401\b|unauthorized/i.test(text)
+}
+
+function computeLastContiguousSeq(sortedEvents: readonly RunEvent[]): number {
+  let contiguous = 0
+  for (const ev of sortedEvents) {
+    if (ev.seq === contiguous + 1) {
+      contiguous = ev.seq
+    } else if (ev.seq > contiguous + 1) {
+      break
+    }
+  }
+  return contiguous
+}
+
+function StageNode({ data }: NodeProps<PipelineFlowNode>) {
+  return (
+    <div className={`stage-node stage-node--${data.status}`}>
+      <Handle type="target" position={Position.Left} style={{ background: '#475569' }} />
+      <div className="stage-node-head">
+        <span className="stage-node-title">{data.label}</span>
+        {data.badge ? <span className="stage-node-badge">{data.badge}</span> : null}
+      </div>
+      {data.subtitle ? <div className="stage-node-subtitle">{data.subtitle}</div> : null}
+      <Handle type="source" position={Position.Right} style={{ background: '#475569' }} />
+    </div>
+  )
+}
+
+const nodeTypes = { stage: StageNode }
+
+function statePillClass(state: RunState): string {
+  if (state === 'PullRequestCreated') return 'pill pill-live'
+  if (state === 'Failed') return 'pill pill-error'
+  if (state === 'Cancelled') return 'pill pill-reconnecting'
+  return 'pill'
+}
+
+function summarizeEvent(ev: RunEvent): string {
+  switch (ev.type) {
+    case 'RunCreated':
+      return ev.objectKey
+    case 'StateChanged':
+      return `${ev.from ?? 'Inicio'} → ${ev.to}${ev.failureReason ? ` (${ev.failureReason})` : ''}`
+    case 'RepositoryPrepared':
+      return `BaseSha ${ev.baseSha.slice(0, 8)}`
+    case 'RepoConfigResolved':
+      return `Origen: ${ev.source}`
+    case 'SpecGenerated':
+      return `${ev.model} (${ev.attempts} intento/s)`
+    case 'AnalystOutputRejected':
+      return `Intento ${ev.attempt}: ${ev.error}`
+    case 'AnalysisRejected':
+      return `${ev.category} (${ev.model})`
+    case 'SandboxCreated':
+      return ev.image
+    case 'SandboxReleased':
+      return 'Sandbox liberado'
+    case 'CodingAttemptFailed':
+      return `Intento ${ev.attempt}: ${ev.reason}`
+    case 'ReviewerOutputRejected':
+      return `R${ev.round} ${ev.reviewer}: ${ev.error}`
+    case 'VerdictRecorded':
+      return `R${ev.round} ${ev.reviewer} → ${ev.decision} (${ev.findingCount} hallazgos)`
+    case 'RiskClassified':
+      return `${ev.riskClass} · ${ev.diffLines} líneas`
+    case 'PullRequestOpened':
+      return `PR #${ev.number} (${ev.branch})`
+    case 'IssueCommented':
+      return `${ev.kind}: ${ev.commentUrl}`
+    case 'NotificationFailed':
+      return `${ev.kind}: ${ev.error}`
+    case 'TokensConsumed':
+      return `${ev.role} · ${ev.inputTokens} in / ${ev.outputTokens} out`
+    case 'EgressBlocked':
+      return `${ev.target}: ${ev.reason}`
+    case 'OutputAppended':
+      return ev.text.trim() || '(salida vacía)'
+    case 'OutputTruncated':
+      return `Salida truncada (${ev.maxBytes ?? 0} bytes)`
+  }
+}
+
+function formatTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('es-ES', { hour12: false })
+}
+
+function TokenGate({
+  notice,
+  onAuthenticated,
+}: {
+  notice: string | null
+  onAuthenticated: (token: string, initialRuns: RunSummary[]) => void
+}) {
+  const [input, setInput] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(notice)
+
+  useEffect(() => {
+    setError(notice)
+  }, [notice])
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const trimmed = input.trim()
+    if (!trimmed) {
+      setError('Introduce el admin-token para acceder al Panel.')
+      return
+    }
+
+    setSubmitting(true)
+    setError(null)
+    try {
+      const runs = await fetchRuns(trimmed)
+      saveStoredToken(trimmed)
+      onAuthenticated(trimmed, runs)
+    } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        setError(err.message)
+      } else {
+        setError(err instanceof Error ? err.message : 'No se pudo validar el token.')
+      }
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <main className="status-screen">
+      <section className="status-card">
+        <h1>Acceso al Panel de CodeNetix</h1>
+        <p>
+          Introduce el <code>admin-token</code> de esta instancia (guardado en <code>/data/admin.token</code> o en{' '}
+          <code>CODENETIX__Host__AccessToken</code>). Se guardará localmente en tu navegador.
+        </p>
+        <form className="token-form" onSubmit={handleSubmit}>
+          <label htmlFor="admin-token-input">admin-token</label>
+          <input
+            id="admin-token-input"
+            type="password"
+            autoComplete="current-password"
+            placeholder="cnx_..."
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            disabled={submitting}
+          />
+          {error ? (
+            <div className="error-banner" role="alert">
+              {error}
+            </div>
+          ) : null}
+          <button type="submit" className="btn btn-primary" disabled={submitting}>
+            {submitting ? 'Comprobando token…' : 'Entrar al Panel'}
+          </button>
+        </form>
+      </section>
+    </main>
+  )
+}
+
+function LivePanel({
+  token,
+  initialRuns,
+  onLogout,
+}: {
+  token: string
+  initialRuns: RunSummary[] | null
+  onLogout: (reason?: string) => void
+}) {
+  const [runs, setRuns] = useState<RunSummary[]>(initialRuns ?? [])
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(initialRuns?.[0]?.runId ?? null)
+  const [events, setEvents] = useState<RunEvent[]>([])
+  const [hubStatus, setHubStatus] = useState<HubStatus>('connecting')
+  const [reconnectAttempt, setReconnectAttempt] = useState(0)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [loadingRuns, setLoadingRuns] = useState(initialRuns === null)
+
+  const lastContiguousSeqRef = useRef<number>(0)
+  const selectedRunIdRef = useRef<string | null>(selectedRunId)
+  selectedRunIdRef.current = selectedRunId
+
+  const syncRunStateFromEvents = useCallback((runId: string, incomingEvents: readonly RunEvent[]) => {
+    let lastChange: Extract<RunEvent, { type: 'StateChanged' }> | null = null
+    for (const ev of incomingEvents) {
+      if (ev.type === 'StateChanged' && ev.runId === runId) {
+        if (!lastChange || ev.seq >= lastChange.seq) {
+          lastChange = ev
+        }
+      }
+    }
+
+    if (!lastChange) {
+      return
+    }
+
+    const change = lastChange
+    setRuns((prev) =>
+      prev.map((r) =>
+        r.runId === runId
+          ? {
+              ...r,
+              state: change.to,
+              failureReason: change.failureReason ?? r.failureReason,
+              failureDetail: change.detail ?? r.failureDetail,
+              updatedAt: change.at,
+            }
+          : r,
+      ),
+    )
+  }, [])
+
+  const refreshRuns = useCallback(async () => {
+    setLoadingRuns(true)
+    try {
+      const list = await fetchRuns(token)
+      setRuns(list)
+      setErrorMessage(null)
+      setSelectedRunId((current) => {
+        if (current && list.some((r) => r.runId === current)) {
+          return current
+        }
+        return list[0]?.runId ?? null
+      })
+    } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        onLogout(err.message)
+      } else {
+        setErrorMessage(err instanceof Error ? err.message : 'Error al cargar las Ejecuciones.')
+      }
+    } finally {
+      setLoadingRuns(false)
+    }
+  }, [token, onLogout])
+
+  useEffect(() => {
+    if (initialRuns === null) {
+      void refreshRuns()
+    }
+  }, [initialRuns, refreshRuns])
+
+  const catchUpEvents = useCallback(
+    async (runId: string, afterSeq: number, signal?: AbortSignal) => {
+      try {
+        const fetched = await fetchRunEvents(token, runId, afterSeq, signal)
+        if (signal?.aborted || selectedRunIdRef.current !== runId) {
+          return
+        }
+        setEvents((prev) => {
+          const merged = mergeRunEvents(prev, fetched)
+          lastContiguousSeqRef.current = computeLastContiguousSeq(merged)
+          return merged
+        })
+        syncRunStateFromEvents(runId, fetched)
+      } catch (err) {
+        if (signal?.aborted || selectedRunIdRef.current !== runId) {
+          return
+        }
+        if (err instanceof UnauthorizedError) {
+          onLogout(err.message)
+        } else {
+          setErrorMessage(err instanceof Error ? err.message : 'Error al recuperar eventos.')
+        }
+      }
+    },
+    [token, onLogout, syncRunStateFromEvents],
+  )
+
+  // Carga inicial de eventos al cambiar de Ejecución seleccionada.
+  useEffect(() => {
+    setEvents([])
+    lastContiguousSeqRef.current = 0
+    if (!selectedRunId) {
+      return
+    }
+    const controller = new AbortController()
+    void catchUpEvents(selectedRunId, 0, controller.signal)
+    return () => {
+      controller.abort()
+    }
+  }, [selectedRunId, catchUpEvents])
+
+  // Conexión SignalR a /hubs/runs con reconexión automática y reanudación por afterSeq.
+  useEffect(() => {
+    if (!selectedRunId) {
+      setHubStatus('disconnected')
+      return
+    }
+
+    let cancelled = false
+    const connection = new HubConnectionBuilder()
+      .withUrl('/hubs/runs', {
+        accessTokenFactory: () => token,
+      })
+      .withAutomaticReconnect()
+      .configureLogging(LogLevel.Warning)
+      .build()
+
+    connection.on('RunEvent', (incoming: RunEvent) => {
+      if (cancelled || incoming.runId !== selectedRunId) {
+        return
+      }
+
+      const previousContiguous = lastContiguousSeqRef.current
+      setEvents((prev) => {
+        const merged = mergeRunEvents(prev, [incoming])
+        lastContiguousSeqRef.current = computeLastContiguousSeq(merged)
+        return merged
+      })
+      syncRunStateFromEvents(selectedRunId, [incoming])
+
+      // Si se detecta un hueco respecto al último seq contiguo, recuperar eventos perdidos vía HTTP.
+      if (incoming.seq > previousContiguous + 1) {
+        void catchUpEvents(selectedRunId, previousContiguous)
+      }
+    })
+
+    connection.onreconnecting(() => {
+      if (!cancelled) {
+        setHubStatus('reconnecting')
+      }
+    })
+
+    connection.onreconnected(() => {
+      if (cancelled) return
+      void connection
+        .invoke('SubscribeRun', selectedRunId)
+        .then(async () => {
+          if (cancelled) return
+          setHubStatus('connected')
+          setErrorMessage(null)
+          await catchUpEvents(selectedRunId, lastContiguousSeqRef.current)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          if (isHubUnauthorizedError(err)) {
+            onLogout('Tu sesión ha caducado o el admin-token ya no es válido.')
+            return
+          }
+          setHubStatus('disconnected')
+          setErrorMessage('No se pudo reanudar la suscripción en vivo tras reconectar.')
+        })
+    })
+
+    connection.onclose((err) => {
+      if (cancelled) return
+      if (isHubUnauthorizedError(err)) {
+        onLogout('Tu sesión ha caducado o el admin-token ya no es válido.')
+        return
+      }
+      setHubStatus('disconnected')
+    })
+
+    setHubStatus('connecting')
+    void connection
+      .start()
+      .then(async () => {
+        if (cancelled) return
+        await connection.invoke('SubscribeRun', selectedRunId)
+        if (!cancelled) {
+          setHubStatus('connected')
+          setErrorMessage(null)
+          // Recuperar cualquier evento emitido entre la carga HTTP inicial y SubscribeRun.
+          await catchUpEvents(selectedRunId, lastContiguousSeqRef.current)
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        if (isHubUnauthorizedError(err)) {
+          onLogout('Tu sesión ha caducado o el admin-token ya no es válido.')
+          return
+        }
+        setHubStatus('disconnected')
+      })
+
+    return () => {
+      cancelled = true
+      if (connection.state === HubConnectionState.Connected) {
+        void connection
+          .invoke('UnsubscribeRun', selectedRunId)
+          .catch(() => undefined)
+          .finally(() => {
+            void connection.stop().catch(() => undefined)
+          })
+      } else {
+        void connection.stop().catch(() => undefined)
+      }
+    }
+  }, [token, selectedRunId, reconnectAttempt, catchUpEvents, syncRunStateFromEvents, onLogout])
+
+  const selectedRun = useMemo(
+    () => runs.find((r) => r.runId === selectedRunId) ?? null,
+    [runs, selectedRunId],
+  )
+
+  const liveRunInfo = useMemo(
+    () => (selectedRun ? deriveCurrentState(selectedRun, events) : null),
+    [selectedRun, events],
+  )
+
+  const graph = useMemo(
+    () => (selectedRun ? buildPipelineGraph(selectedRun, events) : { nodes: [], edges: [] }),
+    [selectedRun, events],
+  )
+
+  const prOpenedEvent = useMemo(
+    () => events.find((e) => e.type === 'PullRequestOpened') ?? null,
+    [events],
+  )
+
+  const hubPill =
+    hubStatus === 'connected'
+      ? { className: 'pill pill-live', label: 'En vivo' }
+      : hubStatus === 'reconnecting'
+        ? { className: 'pill pill-reconnecting', label: 'Reconectando…' }
+        : hubStatus === 'connecting'
+          ? { className: 'pill', label: 'Conectando…' }
+          : { className: 'pill pill-error', label: 'Sin conexión en vivo' }
+
+  return (
+    <div className="panel-shell">
+      <header className="topbar">
+        <div className="topbar-left">
+          <span className="brand">CodeNetix</span>
+          <span className="pill pill-live">Listo</span>
+          {selectedRun ? <span className={hubPill.className}>{hubPill.label}</span> : null}
+          {selectedRun && hubStatus === 'disconnected' ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={() => setReconnectAttempt((n) => n + 1)}
+            >
+              Reconectar
+            </button>
+          ) : null}
+        </div>
+        <div className="topbar-right">
+          <button type="button" className="btn" onClick={() => void refreshRuns()} disabled={loadingRuns}>
+            {loadingRuns ? 'Actualizando…' : 'Actualizar'}
+          </button>
+          <button type="button" className="btn" onClick={() => onLogout()}>
+            Cambiar token
+          </button>
+        </div>
+      </header>
+
+      <div className="panel-body">
+        <aside className="sidebar">
+          <div className="sidebar-header">
+            <h2>Ejecuciones ({runs.length})</h2>
+          </div>
+          <div className="runs-list">
+            {runs.length === 0 ? (
+              <p className="run-meta" style={{ padding: '0.75rem' }}>
+                Todavía no hay Ejecuciones registradas.
+              </p>
+            ) : (
+              runs.map((run) => (
+                <button
+                  key={run.runId}
+                  type="button"
+                  className={`run-item${run.runId === selectedRunId ? ' selected' : ''}`}
+                  onClick={() => setSelectedRunId(run.runId)}
+                >
+                  <div className="run-item-top">
+                    <span className="run-short-id">#{run.shortId}</span>
+                    <span className={statePillClass(run.state)}>{STATE_LABELS[run.state]}</span>
+                  </div>
+                  <div className="run-object-key" title={run.objectKey}>
+                    {run.objectKey}
+                  </div>
+                  <div className="run-meta">{new Date(run.createdAt).toLocaleString('es-ES')}</div>
+                </button>
+              ))
+            )}
+          </div>
+        </aside>
+
+        <main className="workspace">
+          {errorMessage ? (
+            <div className="error-banner" style={{ margin: '0.75rem 1.25rem 0' }} role="alert">
+              {errorMessage}
+            </div>
+          ) : null}
+
+          {selectedRun && liveRunInfo ? (
+            <>
+              <div className="run-header">
+                <div>
+                  <h1>
+                    Ejecución <code>#{selectedRun.shortId}</code> · {selectedRun.objectKey}
+                  </h1>
+                  <div className="run-header-sub">
+                    Estado: <strong>{STATE_LABELS[liveRunInfo.state]}</strong>
+                    {liveRunInfo.failureReason ? ` · Motivo: ${liveRunInfo.failureReason}` : ''}
+                    {liveRunInfo.failureDetail ? ` — ${liveRunInfo.failureDetail}` : ''}
+                  </div>
+                </div>
+                {prOpenedEvent &&
+                prOpenedEvent.type === 'PullRequestOpened' &&
+                isSafeHttpUrl(prOpenedEvent.url) ? (
+                  <a
+                    href={prOpenedEvent.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn btn-primary"
+                  >
+                    Ver PR #{prOpenedEvent.number}
+                  </a>
+                ) : null}
+              </div>
+
+              <div className="graph-container">
+                <ReactFlow
+                  nodes={graph.nodes}
+                  edges={graph.edges}
+                  nodeTypes={nodeTypes}
+                  fitView
+                  fitViewOptions={{ padding: 0.2 }}
+                  nodesDraggable={false}
+                  nodesConnectable={false}
+                  elementsSelectable={false}
+                  proOptions={{ hideAttribution: true }}
+                >
+                  <Background color="#1e293b" gap={20} />
+                  <Controls showInteractive={false} />
+                </ReactFlow>
+              </div>
+
+              <section className="events-panel">
+                <div className="events-panel-header">
+                  <span>Eventos en vivo ({events.length})</span>
+                  <span>Último seq: {events.length > 0 ? events[events.length - 1].seq : 0}</span>
+                </div>
+                <div className="events-list">
+                  {[...events].reverse().map((ev) => (
+                    <div key={ev.seq} className="event-row">
+                      <span className="event-seq">#{ev.seq}</span>
+                      <span className="event-type">{ev.type}</span>
+                      <span className="event-detail">{summarizeEvent(ev)}</span>
+                      <span className="event-time">{formatTime(ev.at)}</span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </>
+          ) : (
+            <div className="empty-workspace">
+              <h2>CodeNetix está en marcha</h2>
+              <p>Lanza una Ejecución sobre una issue de GitHub para ver la cadena de montaje en directo:</p>
+              <pre>
+                <code>{exampleCommand}</code>
+              </pre>
+            </div>
+          )}
+        </main>
+      </div>
+    </div>
+  )
 }
 
 export default function App() {
-  const [state, setState] = useState<ViewState>({ kind: 'loading' })
+  const [healthState, setHealthState] = useState<HealthViewState>({ kind: 'loading' })
+  const [token, setToken] = useState<string | null>(() => loadStoredToken())
+  const [initialRuns, setInitialRuns] = useState<RunSummary[] | null>(null)
+  const [logoutReason, setLogoutReason] = useState<string | null>(null)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -35,13 +627,13 @@ export default function App() {
     const load = async () => {
       try {
         const health = await fetchHealth(controller.signal)
-        setState({ kind: 'health', health })
+        setHealthState({ kind: 'health', health })
         if (health.status === 'Starting') {
           timer = setTimeout(load, retryDelayMs)
         }
       } catch {
         if (controller.signal.aborted) return
-        setState({ kind: 'error' })
+        setHealthState({ kind: 'error' })
         timer = setTimeout(load, retryDelayMs)
       }
     }
@@ -53,62 +645,72 @@ export default function App() {
     }
   }, [])
 
-  if (state.kind === 'loading') {
+  const handleAuthenticated = useCallback((validatedToken: string, loadedRuns: RunSummary[]) => {
+    setLogoutReason(null)
+    setInitialRuns(loadedRuns)
+    setToken(validatedToken)
+  }, [])
+
+  const handleLogout = useCallback((reason?: string) => {
+    clearStoredToken()
+    setInitialRuns(null)
+    setLogoutReason(reason ?? null)
+    setToken(null)
+  }, [])
+
+  if (healthState.kind === 'loading') {
     return (
-      <main>
-        <p>Comprobando el estado de CodeNetix…</p>
+      <main className="status-screen">
+        <section className="status-card">
+          <p>Comprobando el estado de CodeNetix…</p>
+        </section>
       </main>
     )
   }
 
-  if (state.kind === 'error') {
+  if (healthState.kind === 'error') {
     return (
-      <main>
-        <h1>No se puede contactar con CodeNetix</h1>
-        <p>Reintentando…</p>
+      <main className="status-screen">
+        <section className="status-card">
+          <h1>No se puede contactar con CodeNetix</h1>
+          <p>Reintentando…</p>
+        </section>
       </main>
     )
   }
 
-  const { health } = state
+  const { health } = healthState
 
   if (health.status === 'Starting') {
     return (
-      <main>
-        <h1>CodeNetix está arrancando…</h1>
+      <main className="status-screen">
+        <section className="status-card">
+          <h1>CodeNetix está arrancando…</h1>
+        </section>
       </main>
     )
   }
 
   if (health.status === 'Diagnostic') {
     return (
-      <main>
-        <h1>CodeNetix está en modo diagnóstico</h1>
-        <p>La instancia está en marcha, pero no procesará trabajo hasta que completes la configuración:</p>
-        <ul>
-          {health.reasons.map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
-        <p>Define las variables que faltan y reinicia el contenedor.</p>
+      <main className="status-screen">
+        <section className="status-card">
+          <h1>CodeNetix está en modo diagnóstico</h1>
+          <p>La instancia está en marcha, pero no procesará trabajo hasta que completes la configuración:</p>
+          <ul>
+            {health.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+          <p>Define las variables que faltan y reinicia el contenedor.</p>
+        </section>
       </main>
     )
   }
 
-  return (
-    <main>
-      <h1>CodeNetix está en marcha</h1>
-      <p>
-        Arranca el contenedor con el nombre <code>codenetix</code> y, para lanzar trabajo sobre una issue de GitHub,
-        ejecuta <code>codenetix fix</code> dentro de él:
-      </p>
-      <pre>
-        <code>
-          {runCommand}
-          {'\n'}
-          {exampleCommand}
-        </code>
-      </pre>
-    </main>
-  )
+  if (!token) {
+    return <TokenGate notice={logoutReason} onAuthenticated={handleAuthenticated} />
+  }
+
+  return <LivePanel token={token} initialRuns={initialRuns} onLogout={handleLogout} />
 }

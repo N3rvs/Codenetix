@@ -13,7 +13,11 @@ internal static class GetRunEventsEndpoint
 
     public static IEndpointRouteBuilder MapGetRunEvents(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet(Route, HandleAsync).WithName("GetRunEvents");
+        endpoints.MapGet(Route, HandleAsync)
+            .WithName("GetRunEvents")
+            .Produces<IReadOnlyList<RunEvent>>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound);
         return endpoints;
     }
 

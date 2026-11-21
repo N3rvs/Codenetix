@@ -121,7 +121,7 @@ internal sealed partial class RunOrchestrator(
             if (run.State == RunState.Analyzing)
             {
                 await log.AddTransitionAsync(context, run, run.StartCoding(), cancellationToken).ConfigureAwait(false);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
             }
 
             if (run.State == RunState.Coding)
@@ -188,7 +188,7 @@ internal sealed partial class RunOrchestrator(
         var config = EffectiveConfigCalculator.Calculate(limits.Value, file);
         await log.AddAsync(context, run.Id, run.FreezeConfiguration(config), cancellationToken).ConfigureAwait(false);
         await log.AddTransitionAsync(context, run, run.StartAnalysis(), cancellationToken).ConfigureAwait(false);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -211,7 +211,7 @@ internal sealed partial class RunOrchestrator(
         try
         {
             await log.AddAsync(context, run.Id, new SandboxCreated(session.Image), cancellationToken).ConfigureAwait(false);
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
             return session;
         }
         catch
@@ -296,7 +296,7 @@ internal sealed partial class RunOrchestrator(
                     CreatedAt = log.UtcNow,
                 });
                 await log.AddAsync(context, run.Id, new SpecGenerated(ok.Attempts, ok.Model), cancellationToken).ConfigureAwait(false);
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
                 break;
 
             case AnalysisResult.NotAutomatable rejected:
@@ -533,7 +533,7 @@ internal sealed partial class RunOrchestrator(
                         if (report.Passed)
                         {
                             run.CompleteCodingAttempt();
-                            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                            await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
                             passedReport = report;
                             break;
                         }
@@ -542,7 +542,7 @@ internal sealed partial class RunOrchestrator(
                         var shortReason = Truncate(testFeedback);
                         var testAttemptFailedEvent = run.RecordFailedCodingAttempt(shortReason);
                         await log.AddAsync(context, run.Id, testAttemptFailedEvent, cancellationToken).ConfigureAwait(false);
-                        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
 
                         attemptFeedback = TextLimits.Truncate(testFeedback, MaxFeedbackLength);
                         if (roundAttempts >= config.MaxCodingAttempts)
@@ -555,7 +555,7 @@ internal sealed partial class RunOrchestrator(
                     case CodingResult.Failed failed:
                         var attemptFailedEvent = run.RecordFailedCodingAttempt(failed.Reason);
                         await log.AddAsync(context, run.Id, attemptFailedEvent, cancellationToken).ConfigureAwait(false);
-                        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
 
                         attemptFeedback = TextLimits.Truncate(log.Redactor.Redact(failed.Reason), MaxFeedbackLength);
                         if (roundAttempts >= config.MaxCodingAttempts)
@@ -639,7 +639,7 @@ internal sealed partial class RunOrchestrator(
 
             reviewFeedback = TextLimits.Truncate(BuildReviewFeedback(round, changesRequested), MaxFeedbackLength);
             await log.AddTransitionAsync(context, run, run.StartReviewRound(), cancellationToken).ConfigureAwait(false);
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -715,7 +715,7 @@ internal sealed partial class RunOrchestrator(
             stages.Add((kind, stage));
         }
 
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
 
         var tasks = stages.Select(item => RunReviewerSafeAsync(
             new ReviewInput(run.Id, item.Stage.Id, round, item.Reviewer, spec, boundedDiff, testReport, config),
@@ -756,7 +756,7 @@ internal sealed partial class RunOrchestrator(
                 stageId: stage.Id).ConfigureAwait(false);
         }
 
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
         return (diff, roundVerdicts);
     }
 
@@ -998,7 +998,7 @@ internal sealed partial class RunOrchestrator(
             new RiskClassified(policyResult.RiskClass, diffLines, policyResult.MatchedProtectedPaths),
             cancellationToken,
             stageId: decisionStage.Id).ConfigureAwait(false);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
 
         var verdictRecords = await context.Verdicts
             .AsNoTracking()
@@ -1059,7 +1059,7 @@ internal sealed partial class RunOrchestrator(
             CancellationToken.None,
             stageId: decisionStage.Id).ConfigureAwait(false);
         await log.AddTransitionAsync(context, run, run.CompletePullRequest(), CancellationToken.None).ConfigureAwait(false);
-        await context.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, CancellationToken.None).ConfigureAwait(false);
 
         // AD-16 paso 7: aviso terminal en la issue de origen (solo tras confirmar PullRequestCreated en BD).
         await NotifyTerminalAsync(run, pr, policyResult, CancellationToken.None).ConfigureAwait(false);
@@ -1069,7 +1069,7 @@ internal sealed partial class RunOrchestrator(
     {
         var change = run.Fail(reason, detail);
         await log.AddTransitionAsync(context, run, change, cancellationToken).ConfigureAwait(false);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
 
         // AD-16 paso 7: NotAutomatable publica su comentario específico en AnalyzeAsync (Historia 1.9); el resto publica RunFailed aquí.
         if (reason != FailureReason.NotAutomatable)
