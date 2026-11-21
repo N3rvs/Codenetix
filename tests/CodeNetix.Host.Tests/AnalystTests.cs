@@ -78,7 +78,7 @@ public sealed partial class AnalystTests : IDisposable
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
                 "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "RiskClassified", "PullRequestOpened",
-                "StateChanged", "SandboxReleased",
+                "StateChanged", "IssueCommented", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal(1, events[6].GetProperty("attempts").GetInt32());
@@ -187,7 +187,7 @@ public sealed partial class AnalystTests : IDisposable
 
         var events = Events(run);
         Assert.Equal(
-            ["RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged", "StateChanged"],
+            ["RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged", "StateChanged", "IssueCommented"],
             events.Select(e => e.GetProperty("type").GetString()));
         await WaitForDeletedAsync(Path.Combine(_dataDirectory, "workspaces", RunShortIdOf(run)));
     }
@@ -611,11 +611,13 @@ public sealed partial class AnalystTests : IDisposable
     [GeneratedRegex("<untrusted-data label=\"(?<label>[a-z0-9-]+)\" id=\"(?<nonce>[0-9a-f]{32})\">\\n(?<content>.*?)\\n</untrusted-data id=\"\\k<nonce>\">", RegexOptions.Singleline)]
     private static partial Regex DataBlock();
 
-    /// <summary>Si la Ejecución creó un Sandbox, ¿se ha registrado ya su liberación (el último paso del orquestador)?</summary>
+    /// <summary>Si la Ejecución creó un Sandbox, ¿se ha registrado ya su liberación y el aviso terminal?</summary>
     private static bool SandboxSettled(JsonElement run)
     {
         var types = run.GetProperty("events").EnumerateArray().Select(e => e.GetProperty("type").GetString()).ToList();
-        return !types.Contains("SandboxCreated") || types.Contains("SandboxReleased");
+        var notified = types.Contains("IssueCommented") || types.Contains("NotificationFailed");
+        var sandboxDone = !types.Contains("SandboxCreated") || types.Contains("SandboxReleased");
+        return notified && sandboxDone;
     }
 
     private async Task<RunResult> RunToTerminalAsync(HttpClient client, string owner = "o", string repo = "r")

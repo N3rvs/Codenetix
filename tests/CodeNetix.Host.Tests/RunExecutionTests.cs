@@ -86,14 +86,14 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal(runId, root.GetProperty("runId").GetGuid());
         Assert.Equal("PullRequestCreated", root.GetProperty("state").GetString());
         var events = root.GetProperty("events").EnumerateArray().ToList();
-        Assert.Equal(Enumerable.Range(1, 18).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(1, 19).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.All(events, e => Assert.Equal(runId, e.GetProperty("runId").GetGuid()));
         Assert.Equal(
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
                 "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "RiskClassified", "PullRequestOpened",
-                "StateChanged", "SandboxReleased",
+                "StateChanged", "IssueCommented", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
 
@@ -378,11 +378,11 @@ public sealed class RunExecutionTests : IDisposable
 
         var afterFour = await GetEventsAsync(client, run.ShortId, "?afterSeq=4");
         var all = await GetEventsAsync(client, run.RunId.ToString(), string.Empty);
-        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=18");
+        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=19");
 
-        Assert.Equal(Enumerable.Range(5, 14).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(5, 15).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.Equal("PullRequestCreated", afterFour[12].GetProperty("to").GetString());
-        Assert.Equal(Enumerable.Range(1, 18).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(1, 19).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.Empty(none);
 
         using var negative = await client.GetAsync($"/api/runs/{run.RunId}/events?afterSeq=-1", Ct);
@@ -491,9 +491,30 @@ public sealed class RunExecutionTests : IDisposable
         var secondRun = await WaitForRunAsync(client, second.RunId!.Value.ToString(), r => r.State == "Failed");
         Assert.Equal("StageError", secondRun.FailureReason);
 
-        using var events = await client.GetAsync($"/api/runs/{firstRun.RunId}/events", Ct);
-        using var json = JsonDocument.Parse(await events.Content.ReadAsStringAsync(Ct));
-        Assert.Equal([1L, 2L, 3L], json.RootElement.EnumerateArray().Select(e => e.GetProperty("seq").GetInt64()));
+        // Esperar al aviso terminal emitido por StuckRunRecovery tras confirmar Failed(StageError).
+        var firstEvents = await WaitForRunEventsAsync(client, firstRun.RunId, evs => evs.Any(e => e.GetProperty("type").GetString() is "IssueCommented" or "NotificationFailed"));
+        Assert.Equal([1L, 2L, 3L, 4L], firstEvents.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal("IssueCommented", firstEvents[3].GetProperty("type").GetString());
+        Assert.Equal("RunFailed", firstEvents[3].GetProperty("kind").GetString());
+        Assert.Contains(baseFactory.GitHub!.CommentsOn("o", "r", 12), c => c.Body.Contains(firstRun.ShortId, StringComparison.Ordinal));
+        await using var connection = await OpenReadOnlyAsync();
+        Assert.Equal(1L, await ScalarAsync(connection, $"SELECT COUNT(*) FROM gh_notifications WHERE run_id = '{firstRun.RunId.ToString().ToUpperInvariant()}' AND kind = 'RunFailed' AND status = 'Posted';"));
+    }
+
+    private static async Task<List<JsonElement>> WaitForRunEventsAsync(HttpClient client, Guid runId, Func<List<JsonElement>, bool> done)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        while (true)
+        {
+            var events = await GetEventsAsync(client, runId.ToString(), string.Empty);
+            if (done(events))
+            {
+                return events;
+            }
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"La Ejecución {runId} no registró los eventos esperados.");
+            await Task.Delay(50, Ct);
+        }
     }
 
     [Fact]

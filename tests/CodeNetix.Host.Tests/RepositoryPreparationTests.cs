@@ -336,7 +336,7 @@ public sealed class RepositoryPreparationTests : IDisposable
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
                 "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "RiskClassified", "PullRequestOpened",
-                "StateChanged", "SandboxReleased",
+                "StateChanged", "IssueCommented", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal(sha, events[2].GetProperty("baseSha").GetString());
@@ -433,9 +433,9 @@ public sealed class RepositoryPreparationTests : IDisposable
         Assert.Equal("InvalidRepoConfig", run.FailureReason);
         Assert.StartsWith(expected, run.FailureDetail, StringComparison.Ordinal);
 
-        // Ni Analyzing ni configuración: RepositoryPrepared y el fallo, sin pasar por ningún agente.
+        // Ni Analyzing ni configuración: RepositoryPrepared, el fallo y el aviso terminal, sin pasar por ningún agente.
         var events = await GetEventsAsync(client, run.RunId);
-        Assert.Equal(["RunCreated", "StateChanged", "RepositoryPrepared", "StateChanged"], events.Select(e => e.GetProperty("type").GetString()));
+        Assert.Equal(["RunCreated", "StateChanged", "RepositoryPrepared", "StateChanged", "IssueCommented"], events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal("Received", events[3].GetProperty("from").GetString());
         Assert.Equal("InvalidRepoConfig", events[3].GetProperty("failureReason").GetString());
         Assert.DoesNotContain(events, e => e.TryGetProperty("to", out var to) && to.GetString() == "Analyzing");
@@ -460,7 +460,7 @@ public sealed class RepositoryPreparationTests : IDisposable
         Assert.DoesNotContain(Token, run.FailureDetail, StringComparison.Ordinal);
 
         var events = await GetEventsAsync(client, run.RunId);
-        Assert.Equal(["RunCreated", "StateChanged", "StateChanged"], events.Select(e => e.GetProperty("type").GetString()));
+        Assert.Equal(["RunCreated", "StateChanged", "StateChanged", "IssueCommented"], events.Select(e => e.GetProperty("type").GetString()));
         Assert.Equal("CloneFailed", events[2].GetProperty("failureReason").GetString());
         Assert.Null((await ReadSnapshotAsync(run.RunId)).BaseSha);
         await AssertWorkspaceDeletedAsync(run.ShortId);
@@ -518,9 +518,10 @@ public sealed class RepositoryPreparationTests : IDisposable
                 var run = (await runResponse.Content.ReadFromJsonAsync<RunBody>(Ct))!;
                 if (run.State is "Failed" or "Cancelled" or "PullRequestCreated")
                 {
-                    // Si se creó el Sandbox, se espera a su liberación (el último paso del orquestador).
+                    // Se espera al aviso terminal y, si se creó el Sandbox, a su liberación (últimos pasos del orquestador).
                     var types = (await GetEventsAsync(client, runId)).Select(e => e.GetProperty("type").GetString()).ToList();
-                    if (!types.Contains("SandboxCreated") || types.Contains("SandboxReleased"))
+                    var notified = types.Contains("IssueCommented") || types.Contains("NotificationFailed");
+                    if (notified && (!types.Contains("SandboxCreated") || types.Contains("SandboxReleased")))
                     {
                         return run;
                     }

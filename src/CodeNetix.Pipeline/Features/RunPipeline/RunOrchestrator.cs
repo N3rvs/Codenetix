@@ -87,6 +87,9 @@ internal sealed partial class RunOrchestrator(
     /// <summary>Longitud máxima del feedback enviado al Programador entre intentos.</summary>
     private const int MaxFeedbackLength = 8000;
 
+    /// <summary>Timeout acotado para publicar el aviso terminal en GitHub (AD-8, AD-16 paso 7).</summary>
+    private static readonly TimeSpan TerminalNotificationTimeout = TimeSpan.FromSeconds(15);
+
     public async Task RunAsync(Guid runId, CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
@@ -302,7 +305,7 @@ internal sealed partial class RunOrchestrator(
                 await FailAsync(context, run, FailureReason.NotAutomatable, Truncate($"{rejected.Category.ToWireName()}: {rejected.Explanation}"), cancellationToken).ConfigureAwait(false);
 
                 // Solo tras el commit: el aviso en la issue (AD-8). Su resultado no cambia el Estado terminal.
-                await NotifyNotAutomatableAsync(run, owner, repo, number, rejected, cancellationToken).ConfigureAwait(false);
+                await NotifyNotAutomatableAsync(run, owner, repo, number, rejected).ConfigureAwait(false);
                 break;
 
             case AnalysisResult.SchemaInvalid invalid:
@@ -322,32 +325,110 @@ internal sealed partial class RunOrchestrator(
     /// Publica el comentario de rechazo (idempotente por (<c>runId</c>, <c>NotAutomatable</c>)) y registra
     /// <see cref="IssueCommented"/> o <see cref="NotificationFailed"/> con el sumidero externo. Un fallo no relanza.
     /// </summary>
-    private async Task NotifyNotAutomatableAsync(
+    private Task NotifyNotAutomatableAsync(
         PipelineRun run,
         string owner,
         string repo,
         long number,
-        AnalysisResult.NotAutomatable rejected,
-        CancellationToken cancellationToken)
+        AnalysisResult.NotAutomatable rejected)
     {
-        const NotificationKind Kind = NotificationKind.NotAutomatable;
-        var body = NotAutomatableComment.Build(run.ShortId, rejected.Category, rejected.Explanation);
+        var body = log.Redactor.Redact(NotAutomatableComment.Build(run.ShortId, rejected.Category, rejected.Explanation));
+        return SendNotificationAsync(run.Id, owner, repo, number, NotificationKind.NotAutomatable, body);
+    }
+
+    /// <summary>
+    /// AD-16 paso 7 (FR-19, AD-8): publica el aviso terminal en la issue de GitHub tras confirmar el Estado terminal
+    /// en BD. Omite limpiamente orígenes no GitHub y no duplica el rechazo temprano <c>Failed(NotAutomatable)</c>.
+    /// Nunca altera el Estado terminal ni relanza excepciones.
+    /// </summary>
+    internal Task NotifyTerminalAsync(
+        PipelineRun run,
+        PullRequestInfo? pullRequest = null,
+        PolicyResult? policy = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        _ = cancellationToken; // Tras confirmar el Estado terminal, el envío usa siempre un timeout acotado independiente.
+
+        if (!GitHubObjectKey.TryParse(run.ObjectKey, out var owner, out var repo, out var number))
+        {
+            return Task.CompletedTask;
+        }
+
+        switch (run.State)
+        {
+            case RunState.PullRequestCreated:
+                ArgumentNullException.ThrowIfNull(pullRequest);
+                return SendNotificationAsync(
+                    run.Id,
+                    owner,
+                    repo,
+                    number,
+                    NotificationKind.PullRequestCreated,
+                    TerminalNotificationComment.BuildPullRequestCreated(run.ShortId, pullRequest, policy, log.Redactor));
+
+            case RunState.Failed when run.FailureReason is { } reason && reason != FailureReason.NotAutomatable:
+                return SendNotificationAsync(
+                    run.Id,
+                    owner,
+                    repo,
+                    number,
+                    NotificationKind.RunFailed,
+                    TerminalNotificationComment.BuildRunFailed(run.ShortId, reason, run.FailureDetail, log.Redactor));
+
+            case RunState.Cancelled:
+                return SendNotificationAsync(
+                    run.Id,
+                    owner,
+                    repo,
+                    number,
+                    NotificationKind.RunCancelled,
+                    TerminalNotificationComment.BuildRunCancelled(run.ShortId, log.Redactor));
+
+            default:
+                return Task.CompletedTask;
+        }
+    }
+
+    private async Task SendNotificationAsync(
+        Guid runId,
+        string owner,
+        string repo,
+        long number,
+        NotificationKind kind,
+        string body)
+    {
+        using var notifyCts = new CancellationTokenSource(TerminalNotificationTimeout);
 
         RunEvent outcome;
         try
         {
-            var result = await notifier.NotifyAsync(run.Id, owner, repo, number, Kind, body, cancellationToken).ConfigureAwait(false);
+            var result = await notifier.NotifyAsync(runId, owner, repo, number, kind, body, notifyCts.Token).ConfigureAwait(false);
             outcome = result.Status == NotificationStatus.Posted
-                ? new IssueCommented(Kind, result.CommentUrl ?? string.Empty)
-                : new NotificationFailed(Kind, result.Error ?? "error desconocido");
+                ? new IssueCommented(kind, result.CommentUrl ?? string.Empty)
+                : new NotificationFailed(kind, log.Redactor.Redact(result.Error ?? "error desconocido"));
         }
-        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
-            outcome = new NotificationFailed(Kind, StuckRunRecovery.ShortReason(ex));
+            outcome = new NotificationFailed(kind, "tiempo agotado al publicar el aviso en GitHub");
+        }
+        catch (Exception ex)
+        {
+            outcome = new NotificationFailed(kind, log.Redactor.Redact(StuckRunRecovery.ShortReason(ex)));
         }
 
-        await events.AppendAsync(run.Id, null, outcome, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await events.AppendAsync(runId, null, outcome, CancellationToken.None).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is DbUpdateException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            LogNotificationEventNotRecorded(RunShortId.Of(runId), kind, log.Redactor.Redact(ex.Message));
+        }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido registrar el evento de notificación {Kind} de la Ejecución {ShortId}: {Reason}.")]
+    private partial void LogNotificationEventNotRecorded(string shortId, NotificationKind kind, string reason);
 
     /// <summary>
     /// AD-16 pasos 4 y 5 (FR-11, FR-14, FR-15, FR-16): captura una única línea base de tests y ejecuta el bucle de
@@ -979,6 +1060,9 @@ internal sealed partial class RunOrchestrator(
             stageId: decisionStage.Id).ConfigureAwait(false);
         await log.AddTransitionAsync(context, run, run.CompletePullRequest(), CancellationToken.None).ConfigureAwait(false);
         await context.SaveChangesAsync(CancellationToken.None).ConfigureAwait(false);
+
+        // AD-16 paso 7: aviso terminal en la issue de origen (solo tras confirmar PullRequestCreated en BD).
+        await NotifyTerminalAsync(run, pr, policyResult, CancellationToken.None).ConfigureAwait(false);
     }
 
     private async Task FailAsync(PipelineDbContext context, PipelineRun run, FailureReason reason, string detail, CancellationToken cancellationToken)
@@ -986,6 +1070,12 @@ internal sealed partial class RunOrchestrator(
         var change = run.Fail(reason, detail);
         await log.AddTransitionAsync(context, run, change, cancellationToken).ConfigureAwait(false);
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        // AD-16 paso 7: NotAutomatable publica su comentario específico en AnalyzeAsync (Historia 1.9); el resto publica RunFailed aquí.
+        if (reason != FailureReason.NotAutomatable)
+        {
+            await NotifyTerminalAsync(run, cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static string Truncate(string value) => TextLimits.Truncate(value, MaxDetailLength);
