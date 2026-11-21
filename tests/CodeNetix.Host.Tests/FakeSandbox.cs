@@ -118,3 +118,67 @@ internal sealed class FakeSandboxToolsProvisioner : ISandboxToolsProvisioner
         return Task.CompletedTask;
     }
 }
+
+/// <summary><see cref="ITestRunner"/> falso (por defecto en <see cref="CodeNetixFactory"/>): aprueba con un test nuevo.</summary>
+internal sealed class FakeTestRunner : ITestRunner
+{
+    private readonly ConcurrentQueue<TestReport> _queuedReports = new();
+
+    public int BaselineCalls { get; private set; }
+
+    public int RunCalls { get; private set; }
+
+    public TestBaseline BaselineResult { get; set; } = TestBaseline.Empty;
+
+    public string? FailBaselineWith { get; set; }
+
+    public string? FailRunWith { get; set; }
+
+    public Func<ISandboxSession, TestBaseline, TestReport>? RunHandler { get; set; }
+
+    public TestReport DefaultReport { get; set; } = new(
+        BuildSucceeded: true,
+        TotalTests: 1,
+        PassedTests: 1,
+        FailedTests: 0,
+        SkippedTests: 0,
+        NewTests: ["CodeNetix.GeneratedTests.AddedTest"],
+        FailedTestCases: [],
+        Duration: TimeSpan.FromMilliseconds(50));
+
+    public void EnqueueReport(TestReport report) => _queuedReports.Enqueue(report);
+
+    public Task<TestBaseline> CaptureBaselineAsync(ISandboxSession session, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        BaselineCalls++;
+        if (FailBaselineWith is not null)
+        {
+            throw new SandboxUnavailableException(FailBaselineWith);
+        }
+
+        return Task.FromResult(BaselineResult);
+    }
+
+    public Task<TestReport> RunAsync(ISandboxSession session, TestBaseline baseline, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        RunCalls++;
+        if (FailRunWith is not null)
+        {
+            throw new SandboxUnavailableException(FailRunWith);
+        }
+
+        if (RunHandler is not null)
+        {
+            return Task.FromResult(RunHandler(session, baseline));
+        }
+
+        if (_queuedReports.TryDequeue(out var report))
+        {
+            return Task.FromResult(report);
+        }
+
+        return Task.FromResult(DefaultReport);
+    }
+}

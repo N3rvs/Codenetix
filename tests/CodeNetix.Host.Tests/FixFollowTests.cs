@@ -232,7 +232,7 @@ public sealed class FixFollowTests : IDisposable
         Assert.Equal("[7] SpecGenerated claude-sonnet-5-5 (1 intento(s))", events[6]);
         Assert.Equal("[8] StateChanged Analyzing → Coding", events[7]);
         Assert.Equal("[9] OutputAppended", events[8]);
-        Assert.Equal("[10] StateChanged Coding → Failed (StageError: Pruebas no disponibles)", events[9]);
+        Assert.Equal("[10] StateChanged Coding → Failed (StageError: Revisión no disponible)", events[9]);
         Assert.Empty(_stderr.ToString());
     }
 

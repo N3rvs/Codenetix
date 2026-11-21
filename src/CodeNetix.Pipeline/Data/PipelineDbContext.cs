@@ -16,6 +16,7 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
     public const string RunsTable = Prefix + "_runs";
     public const string EventsTable = Prefix + "_events";
     public const string SpecsTable = Prefix + "_specs";
+    public const string TestReportsTable = Prefix + "_test_reports";
     public const string ActiveObjectKeyIndex = "ux_" + RunsTable + "_active_object_key";
     public const string ShortIdIndex = "ux_" + RunsTable + "_short_id";
     public const string EventIdIndex = "ux_" + RunsTable + "_event_id";
@@ -31,6 +32,8 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
     public DbSet<RunEventRecord> Events => Set<RunEventRecord>();
 
     public DbSet<RunSpecRecord> Specs => Set<RunSpecRecord>();
+
+    public DbSet<RunTestReportRecord> TestReports => Set<RunTestReportRecord>();
 
     /// <summary>Configura SQLite con el historial de migraciones del módulo.</summary>
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)
@@ -91,6 +94,22 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
             .WithOne()
             .HasForeignKey<RunSpecRecord>(s => s.RunId)
             .HasConstraintName("fk_" + SpecsTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var testReports = modelBuilder.Entity<RunTestReportRecord>();
+        testReports.ToTable(TestReportsTable);
+        testReports.HasKey(t => t.RunId).HasName("pk_" + TestReportsTable);
+        testReports.Property(t => t.RunId).HasColumnName("run_id").ValueGeneratedNever();
+        testReports.Property(t => t.ReportJson).HasColumnName("report_json").IsRequired();
+        testReports.Property(t => t.Passed).HasColumnName("passed");
+        testReports.Property(t => t.TotalTests).HasColumnName("total_tests");
+        testReports.Property(t => t.FailedTests).HasColumnName("failed_tests");
+        testReports.Property(t => t.NewTestsCount).HasColumnName("new_tests_count");
+        testReports.Property(t => t.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        testReports.HasOne<PipelineRun>()
+            .WithOne()
+            .HasForeignKey<RunTestReportRecord>(t => t.RunId)
+            .HasConstraintName("fk_" + TestReportsTable + "_" + RunsTable)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }
