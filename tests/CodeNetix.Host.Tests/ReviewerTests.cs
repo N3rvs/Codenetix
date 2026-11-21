@@ -109,7 +109,7 @@ public sealed class ReviewerTests : IDisposable
 
         Assert.Equal("Failed", run.GetProperty("state").GetString());
         Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Rondas de revisión no disponibles", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
 
         // Aislamiento (FR-14, AD-5): ningún prompt de Revisor contiene la salida del Programador,
         // y todos contienen Spec, Diff y TestReport.
@@ -174,7 +174,11 @@ public sealed class ReviewerTests : IDisposable
     [Fact]
     public async Task Structured_findings_are_validated_persisted_and_exposed_in_API()
     {
-        await using var factory = CreateFactory();
+        var settings = new Dictionary<string, string?>(CodeNetixFactory.CompleteSettings)
+        {
+            ["CODENETIX:Limits:MaxReviewRounds"] = "1",
+        };
+        await using var factory = CreateFactory(settings);
         factory.ChatClient.Handler = (call, _) =>
         {
             var system = call.Messages.First(m => m.Role == ChatRole.System).Text;
@@ -228,6 +232,7 @@ public sealed class ReviewerTests : IDisposable
         var settings = new Dictionary<string, string?>(CodeNetixFactory.CompleteSettings)
         {
             ["CODENETIX:Agents:SchemaRetries"] = "2",
+            ["CODENETIX:Limits:MaxReviewRounds"] = "1",
         };
         await using var factory = CreateFactory(settings);
 
@@ -285,7 +290,11 @@ public sealed class ReviewerTests : IDisposable
     [Fact]
     public async Task Provider_error_in_one_reviewer_becomes_changes_requested_while_others_succeed()
     {
-        await using var factory = CreateFactory();
+        var settings = new Dictionary<string, string?>(CodeNetixFactory.CompleteSettings)
+        {
+            ["CODENETIX:Limits:MaxReviewRounds"] = "1",
+        };
+        await using var factory = CreateFactory(settings);
 
         factory.ChatClient.Handler = (call, _) =>
         {

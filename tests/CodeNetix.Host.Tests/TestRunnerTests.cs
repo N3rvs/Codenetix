@@ -386,7 +386,7 @@ public sealed class TestRunnerTests : IDisposable
 
         Assert.Equal("Failed", run.GetProperty("state").GetString());
         Assert.Equal("StageError", run.GetProperty("failureReason").GetString());
-        Assert.Equal("Rondas de revisión no disponibles", run.GetProperty("failureDetail").GetString());
+        Assert.Equal("Creación de PR no disponible", run.GetProperty("failureDetail").GetString());
 
         // La línea base capturada se pasa intacta en cada intento
         Assert.Equal(3, observedBaselines.Count);

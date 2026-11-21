@@ -62,7 +62,7 @@ public sealed partial class AnalystTests : IDisposable
         Assert.Equal("Failed", run.State);
         Assert.Equal("StageError", run.FailureReason);
         Assert.Equal(RunOrchestrator.Detail, run.FailureDetail);
-        Assert.Equal("Rondas de revisión no disponibles", run.FailureDetail);
+        Assert.Equal("Creación de PR no disponible", run.FailureDetail);
 
         // GET /api/runs/<id> incluye la Spec.
         var spec = run.Json.GetProperty("spec");

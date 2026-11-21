@@ -236,7 +236,7 @@ public sealed class FixFollowTests : IDisposable
         Assert.Equal("[11] VerdictRecorded ronda 1 security → approved (0 hallazgo(s))", events[10]);
         Assert.Equal("[12] VerdictRecorded ronda 1 quality → approved (0 hallazgo(s))", events[11]);
         Assert.Equal("[13] VerdictRecorded ronda 1 tests → approved (0 hallazgo(s))", events[12]);
-        Assert.Equal("[14] StateChanged Reviewing → Failed (StageError: Rondas de revisión no disponibles)", events[13]);
+        Assert.Equal("[14] StateChanged Reviewing → Failed (StageError: Creación de PR no disponible)", events[13]);
         Assert.Empty(_stderr.ToString());
     }
 
