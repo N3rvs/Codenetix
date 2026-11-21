@@ -335,7 +335,7 @@ public sealed class RepositoryPreparationTests : IDisposable
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
-                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "PullRequestOpened",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "RiskClassified", "PullRequestOpened",
                 "StateChanged", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
@@ -345,7 +345,8 @@ public sealed class RepositoryPreparationTests : IDisposable
         Assert.Equal(("Analyzing", "Coding"), (events[7].GetProperty("from").GetString(), events[7].GetProperty("to").GetString()));
         Assert.Equal(("Coding", "Reviewing"), (events[9].GetProperty("from").GetString(), events[9].GetProperty("to").GetString()));
         Assert.Equal(("Reviewing", "Deciding"), (events[13].GetProperty("from").GetString(), events[13].GetProperty("to").GetString()));
-        Assert.Equal(("Deciding", "PullRequestCreated"), (events[15].GetProperty("from").GetString(), events[15].GetProperty("to").GetString()));
+        Assert.Equal("Minor", events[14].GetProperty("riskClass").GetString());
+        Assert.Equal(("Deciding", "PullRequestCreated"), (events[16].GetProperty("from").GetString(), events[16].GetProperty("to").GetString()));
 
         var (baseSha, config) = await ReadSnapshotAsync(run.RunId);
         Assert.Equal(sha, baseSha);

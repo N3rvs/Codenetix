@@ -75,6 +75,7 @@ public static class RunStateExtensions
 [JsonDerivedType(typeof(CodingAttemptFailed), nameof(CodingAttemptFailed))]
 [JsonDerivedType(typeof(ReviewerOutputRejected), nameof(ReviewerOutputRejected))]
 [JsonDerivedType(typeof(VerdictRecorded), nameof(VerdictRecorded))]
+[JsonDerivedType(typeof(RiskClassified), nameof(RiskClassified))]
 [JsonDerivedType(typeof(PullRequestOpened), nameof(PullRequestOpened))]
 public abstract record RunEvent
 {
@@ -156,6 +157,9 @@ public sealed record ReviewerOutputRejected(int Round, ReviewerKind Reviewer, in
 
 /// <summary>Veredicto persistido en <c>run_verdicts</c> para un Revisor en una Ronda (AD-11, FR-15).</summary>
 public sealed record VerdictRecorded(int Round, ReviewerKind Reviewer, VerdictDecision Decision, int FindingCount, string Model) : RunEvent;
+
+/// <summary>Clasificación determinista de riesgo emitida en la etapa <see cref="StageKind.Decision"/> (AD-9, FR-18).</summary>
+public sealed record RiskClassified(RiskClass RiskClass, int DiffLines, IReadOnlyList<string> MatchedProtectedPaths) : RunEvent;
 
 /// <summary>Pull Request abierto en GitHub y persistido en <c>gh_pull_requests</c> (FR-17, AD-8).</summary>
 public sealed record PullRequestOpened(long Number, string Url, string Branch, string CommitSha) : RunEvent;

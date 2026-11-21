@@ -77,7 +77,7 @@ public sealed partial class AnalystTests : IDisposable
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
-                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "PullRequestOpened",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "RiskClassified", "PullRequestOpened",
                 "StateChanged", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));

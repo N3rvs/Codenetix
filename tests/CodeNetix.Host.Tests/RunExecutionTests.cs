@@ -86,13 +86,13 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal(runId, root.GetProperty("runId").GetGuid());
         Assert.Equal("PullRequestCreated", root.GetProperty("state").GetString());
         var events = root.GetProperty("events").EnumerateArray().ToList();
-        Assert.Equal(Enumerable.Range(1, 17).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(1, 18).Select(i => (long)i), events.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.All(events, e => Assert.Equal(runId, e.GetProperty("runId").GetGuid()));
         Assert.Equal(
             [
                 "RunCreated", "StateChanged", "RepositoryPrepared", "RepoConfigResolved", "StateChanged",
                 "SandboxCreated", "SpecGenerated", "StateChanged", "OutputAppended", "StateChanged",
-                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "PullRequestOpened",
+                "VerdictRecorded", "VerdictRecorded", "VerdictRecorded", "StateChanged", "RiskClassified", "PullRequestOpened",
                 "StateChanged", "SandboxReleased",
             ],
             events.Select(e => e.GetProperty("type").GetString()));
@@ -124,12 +124,15 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal("Reviewing", events[13].GetProperty("from").GetString());
         Assert.Equal("Deciding", events[13].GetProperty("to").GetString());
 
-        Assert.Equal("PullRequestOpened", events[14].GetProperty("type").GetString());
-        Assert.True(events[14].GetProperty("number").GetInt64() > 0);
+        Assert.Equal("RiskClassified", events[14].GetProperty("type").GetString());
+        Assert.Equal("Minor", events[14].GetProperty("riskClass").GetString());
 
-        Assert.Equal("Deciding", events[15].GetProperty("from").GetString());
-        Assert.Equal("PullRequestCreated", events[15].GetProperty("to").GetString());
-        Assert.True(events[15].GetProperty("at").GetDateTimeOffset() >= events[0].GetProperty("at").GetDateTimeOffset());
+        Assert.Equal("PullRequestOpened", events[15].GetProperty("type").GetString());
+        Assert.True(events[15].GetProperty("number").GetInt64() > 0);
+
+        Assert.Equal("Deciding", events[16].GetProperty("from").GetString());
+        Assert.Equal("PullRequestCreated", events[16].GetProperty("to").GetString());
+        Assert.True(events[16].GetProperty("at").GetDateTimeOffset() >= events[0].GetProperty("at").GetDateTimeOffset());
 
 
 
@@ -375,11 +378,11 @@ public sealed class RunExecutionTests : IDisposable
 
         var afterFour = await GetEventsAsync(client, run.ShortId, "?afterSeq=4");
         var all = await GetEventsAsync(client, run.RunId.ToString(), string.Empty);
-        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=17");
+        var none = await GetEventsAsync(client, run.RunId.ToString(), "?afterSeq=18");
 
-        Assert.Equal(Enumerable.Range(5, 13).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
-        Assert.Equal("PullRequestCreated", afterFour[11].GetProperty("to").GetString());
-        Assert.Equal(Enumerable.Range(1, 17).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal(Enumerable.Range(5, 14).Select(i => (long)i), afterFour.Select(e => e.GetProperty("seq").GetInt64()));
+        Assert.Equal("PullRequestCreated", afterFour[12].GetProperty("to").GetString());
+        Assert.Equal(Enumerable.Range(1, 18).Select(i => (long)i), all.Select(e => e.GetProperty("seq").GetInt64()));
         Assert.Empty(none);
 
         using var negative = await client.GetAsync($"/api/runs/{run.RunId}/events?afterSeq=-1", Ct);

@@ -386,6 +386,18 @@ internal static class FixMode
             case "ReviewerOutputRejected":
                 return $"[{seq}] ReviewerOutputRejected ronda {GetNumber(item, "round")} {GetString(item, "reviewer")} intento {GetNumber(item, "attempt")}: {GetString(item, "error")}".TrimEnd();
 
+            case "RiskClassified":
+            {
+                var risk = GetString(item, "riskClass") ?? "?";
+                var diffLines = GetNumber(item, "diffLines");
+                var matchedCount = item.TryGetProperty("matchedProtectedPaths", out var paths) && paths.ValueKind == JsonValueKind.Array
+                    ? paths.GetArrayLength()
+                    : 0;
+                return matchedCount > 0
+                    ? $"[{seq}] RiskClassified {risk} ({diffLines} líneas, {matchedCount} ruta(s) protegida(s))"
+                    : $"[{seq}] RiskClassified {risk} ({diffLines} líneas)";
+            }
+
             case "PullRequestOpened":
                 return $"[{seq}] PullRequestOpened #{GetNumber(item, "number")} {GetString(item, "url")}".TrimEnd();
 
