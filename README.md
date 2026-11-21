@@ -3,8 +3,9 @@
 CodeNetix convierte una issue de GitHub en un cambio revisado: analiza la issue, programa la corrección dentro de
 un Sandbox aislado, la prueba y la revisa antes de proponer un PR. Se publica bajo la [licencia Apache 2.0](LICENSE).
 
-> Estado: en desarrollo. Hoy CodeNetix genera la Spec de la issue (o la rechaza con un aviso en la issue) y prepara
-> el Sandbox de cada Ejecución; la programación, las pruebas y el PR llegan en las próximas historias.
+> Estado: en desarrollo. Hoy CodeNetix genera la Spec de la issue (o la rechaza con un aviso en la issue), prepara
+> el Sandbox aislado con Egress Gateway, ejecuta al Programador y valida los cambios con compilación y tests
+> obligatorios; la Revisión y la creación del PR llegan en la próxima épica.
 
 ## Requisitos
 
@@ -96,6 +97,12 @@ dotnet test --solution CodeNetix.slnx
 
 Las pruebas de integración del Sandbox usan el Docker local (Docker Desktop en Windows) y la imagen
 `codenetix-sandbox`; si Docker no responde o falta la imagen, se omiten. Todo lo que crean lleva la etiqueta
-`codenetix.managed=true` y se borra al terminar.
+`codenetix.managed=true` y se borra al terminar. La prueba de fuego de seguridad (repositorio hostil sin acceso a
+`.git/config`, credenciales reales ni salida externa no autorizada) forma parte de la suite estándar y se puede lanzar
+por separado con:
+
+```bash
+dotnet test --project tests/CodeNetix.Host.Tests -- --filter-trait Category=SecurityFire
+```
 
 Consulta [CONTRIBUTING.md](CONTRIBUTING.md) para contribuir.
