@@ -34,13 +34,18 @@ internal interface IRunOrchestrator
 /// <see cref="IssueCommented"/> o <see cref="NotificationFailed"/>;
 /// <c>SchemaInvalid</c> → <c>Failed(SchemaInvalid, último error)</c>; <c>ProviderError</c> →
 /// <c>Failed(StageError, "Proveedor: …")</c> (el detalle se redacta al persistirse).</item>
-/// <item>Paso 4 (<c>Coding</c>): captura la línea base con <see cref="ITestRunner.CaptureBaselineAsync"/>, ejecuta
-/// el Programador (<see cref="ICodingAgent"/>) y valida los cambios con <see cref="ITestRunner.RunAsync"/> reintentando
-/// con feedback hasta <c>EffectiveConfig.MaxCodingAttempts</c>. Al agotarlos, <c>Failed(TestsFailed)</c>.</item>
+/// <item>Paso 4 (<c>Coding</c>): captura la línea base una única vez con <see cref="ITestRunner.CaptureBaselineAsync"/>
+/// y ejecuta el bucle de Rondas de revisión (<c>1..EffectiveConfig.MaxReviewRounds</c>). En cada ronda concede hasta
+/// <c>EffectiveConfig.MaxCodingAttempts</c> intentos del Programador (<see cref="ICodingAgent"/>) + validación
+/// obligatoria con <see cref="ITestRunner.RunAsync"/> usando la misma línea base. Al agotar los intentos de una ronda,
+/// <c>Failed(TestsFailed)</c>.</item>
 /// <item>Paso 5 (<c>Reviewing</c>): exporta <c>/workspace</c>, calcula el diff contra <c>BaseSha</c>, crea una Etapa
 /// <c>Review</c> por Revisor activo y ejecuta los Revisores en paralelo persistiendo <c>run_verdicts</c> y
-/// <see cref="VerdictRecorded"/>. Puente provisional hasta la Historia 3.2: finaliza en
-/// <c>Failed(StageError, <see cref="Detail"/>)</c> ("Rondas de revisión no disponibles").</item>
+/// <see cref="VerdictRecorded"/>. Evalúa los Veredictos de la ronda: cualquier <c>Rejected</c> →
+/// <c>Failed(ReviewRejected)</c>; unanimidad <c>Approved</c> → puente provisional hacia la Historia 3.3
+/// (<c>Failed(StageError, <see cref="Detail"/>)</c> "Creación de PR no disponible"); <c>ChangesRequested</c> con rondas
+/// restantes → <c>Reviewing → Coding</c> (<see cref="PipelineRun.StartReviewRound"/>) pasando los hallazgos como
+/// feedback; rondas agotadas sin unanimidad → <c>Failed(ReviewRoundsExhausted)</c>.</item>
 /// </list>
 /// Errores: clon o credenciales → <c>Failed(CloneFailed)</c>; YAML o esquema inválidos →
 /// <c>Failed(InvalidRepoConfig)</c> sin llamar a ningún agente. El árbol de trabajo se borra al terminar
@@ -61,8 +66,8 @@ internal sealed partial class RunOrchestrator(
     IOptions<InstanceLimits> limits,
     ILogger<RunOrchestrator> logger) : IRunOrchestrator
 {
-    /// <summary>Detalle del puente provisional tras persistir los Veredictos de la Ronda 1 (hasta la Historia 3.2).</summary>
-    public const string Detail = "Rondas de revisión no disponibles";
+    /// <summary>Detalle del puente provisional tras aprobación unánime de Revisores (hasta la Historia 3.3).</summary>
+    public const string Detail = "Creación de PR no disponible";
 
     public const string IssueUnreadablePrefix = "no se pudo leer la issue: ";
 
@@ -343,9 +348,11 @@ internal sealed partial class RunOrchestrator(
     }
 
     /// <summary>
-    /// AD-16 paso 4: bucle de intentos del Programador con validación obligatoria mediante <see cref="ITestRunner"/>.
-    /// Al superar compilación, tests y test nuevo obligatorio, persiste <c>run_test_reports</c> y se detiene en el
-    /// puente provisional hacia la Épica 3 (<c>Failed(StageError, "Revisión no disponible")</c>).
+    /// AD-16 pasos 4 y 5 (FR-11, FR-14, FR-15, FR-16): captura una única línea base de tests y ejecuta el bucle de
+    /// Rondas de revisión (<c>1..EffectiveConfig.MaxReviewRounds</c>). Cada ronda concede hasta
+    /// <c>EffectiveConfig.MaxCodingAttempts</c> intentos de Programador + <see cref="ITestRunner.RunAsync"/>, seguidos
+    /// de revisión en paralelo y evaluación determinista de Veredictos (<c>Rejected</c>, unanimidad <c>Approved</c>,
+    /// o <c>ChangesRequested</c> con transición <c>Reviewing → Coding</c> o <c>ReviewRoundsExhausted</c>).
     /// </summary>
     private async Task CodeAsync(PipelineDbContext context, PipelineRun run, ISandboxSession? sandbox, CancellationToken cancellationToken)
     {
@@ -407,83 +414,157 @@ internal sealed partial class RunOrchestrator(
             return;
         }
 
-        string? feedback = null;
-        while (run.State == RunState.Coding && run.CodingAttempts < config.MaxCodingAttempts)
+        string? reviewFeedback = null;
+        var maxRounds = Math.Max(1, config.MaxReviewRounds);
+        for (var round = 1; round <= maxRounds && run.State == RunState.Coding; round++)
         {
-            var attemptNumber = run.CodingAttempts + 1;
-            var input = new CodingInput(run.Id, attemptNumber, issue.Title, issue.Body, spec, config, sandbox, feedback);
-            var result = await coder.RunAsync(input, cancellationToken).ConfigureAwait(false);
+            TestReport? passedReport = null;
+            string? attemptFeedback = null;
+            var roundAttempts = 0;
 
-            switch (result)
+            while (run.State == RunState.Coding && roundAttempts < config.MaxCodingAttempts)
             {
-                case CodingResult.Completed:
-                    TestReport report;
-                    try
-                    {
-                        report = await testRunner.RunAsync(sandbox, baseline, cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (SandboxUnavailableException ex)
-                    {
-                        await FailAsync(context, run, FailureReason.StageError, Truncate(TestRunnerFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
-                        return;
-                    }
+                roundAttempts++;
+                var attemptNumber = run.CodingAttempts + 1;
+                var feedback = CombineFeedback(reviewFeedback, attemptFeedback);
+                var input = new CodingInput(run.Id, attemptNumber, issue.Title, issue.Body, spec, config, sandbox, feedback);
+                var result = await coder.RunAsync(input, cancellationToken).ConfigureAwait(false);
 
-                    report = RedactTestReport(report);
-                    await UpsertTestReportAsync(context, run.Id, report, cancellationToken).ConfigureAwait(false);
+                switch (result)
+                {
+                    case CodingResult.Completed:
+                        TestReport report;
+                        try
+                        {
+                            report = await testRunner.RunAsync(sandbox, baseline, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (SandboxUnavailableException ex)
+                        {
+                            await FailAsync(context, run, FailureReason.StageError, Truncate(TestRunnerFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+                            return;
+                        }
 
-                    if (report.Passed)
-                    {
-                        run.CompleteCodingAttempt();
+                        report = RedactTestReport(report);
+                        await UpsertTestReportAsync(context, run.Id, report, cancellationToken).ConfigureAwait(false);
+
+                        if (report.Passed)
+                        {
+                            run.CompleteCodingAttempt();
+                            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                            passedReport = report;
+                            break;
+                        }
+
+                        var testFeedback = BuildTestFailureFeedback(report);
+                        var shortReason = Truncate(testFeedback);
+                        var testAttemptFailedEvent = run.RecordFailedCodingAttempt(shortReason);
+                        await log.AddAsync(context, run.Id, testAttemptFailedEvent, cancellationToken).ConfigureAwait(false);
                         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                        await ReviewAsync(context, run, sandbox, spec, report, config, round: 1, cancellationToken).ConfigureAwait(false);
-                        return;
-                    }
+                        attemptFeedback = TextLimits.Truncate(testFeedback, MaxFeedbackLength);
+                        if (roundAttempts >= config.MaxCodingAttempts)
+                        {
+                            await FailAsync(context, run, FailureReason.TestsFailed, shortReason, cancellationToken).ConfigureAwait(false);
+                            return;
+                        }
+                        break;
 
-                    var testFeedback = BuildTestFailureFeedback(report);
-                    var shortReason = Truncate(testFeedback);
-                    var testAttemptFailedEvent = run.RecordFailedCodingAttempt(shortReason);
-                    await log.AddAsync(context, run.Id, testAttemptFailedEvent, cancellationToken).ConfigureAwait(false);
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                    case CodingResult.Failed failed:
+                        var attemptFailedEvent = run.RecordFailedCodingAttempt(failed.Reason);
+                        await log.AddAsync(context, run.Id, attemptFailedEvent, cancellationToken).ConfigureAwait(false);
+                        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                    feedback = TextLimits.Truncate(testFeedback, MaxFeedbackLength);
-                    if (run.CodingAttempts >= config.MaxCodingAttempts)
-                    {
-                        await FailAsync(context, run, FailureReason.TestsFailed, shortReason, cancellationToken).ConfigureAwait(false);
-                        return;
-                    }
+                        attemptFeedback = TextLimits.Truncate(log.Redactor.Redact(failed.Reason), MaxFeedbackLength);
+                        if (roundAttempts >= config.MaxCodingAttempts)
+                        {
+                            await FailAsync(context, run, FailureReason.TestsFailed, Truncate(failed.Reason), cancellationToken).ConfigureAwait(false);
+                            return;
+                        }
+                        break;
+
+                    default:
+                        throw new InvalidOperationException($"Resultado del Programador desconocido: {result.GetType().Name}.");
+                }
+
+                if (passedReport is not null)
+                {
                     break;
-
-                case CodingResult.Failed failed:
-                    var attemptFailedEvent = run.RecordFailedCodingAttempt(failed.Reason);
-                    await log.AddAsync(context, run.Id, attemptFailedEvent, cancellationToken).ConfigureAwait(false);
-                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-                    feedback = failed.Reason;
-                    if (run.CodingAttempts >= config.MaxCodingAttempts)
-                    {
-                        await FailAsync(context, run, FailureReason.TestsFailed, Truncate(failed.Reason), cancellationToken).ConfigureAwait(false);
-                        return;
-                    }
-                    break;
-
-                default:
-                    throw new InvalidOperationException($"Resultado del Programador desconocido: {result.GetType().Name}.");
+                }
             }
-        }
 
-        if (run.State == RunState.Coding)
-        {
-            await FailAsync(context, run, FailureReason.TestsFailed, "reintentos agotados", cancellationToken).ConfigureAwait(false);
+            if (passedReport is null)
+            {
+                if (run.State == RunState.Coding)
+                {
+                    await FailAsync(context, run, FailureReason.TestsFailed, "reintentos agotados", cancellationToken).ConfigureAwait(false);
+                }
+
+                return;
+            }
+
+            var roundVerdicts = await ReviewAsync(context, run, sandbox, spec, passedReport, config, round, cancellationToken).ConfigureAwait(false);
+            if (roundVerdicts is null)
+            {
+                return;
+            }
+
+            // 1. Precedencia máxima: cualquier Rejected termina inmediatamente en Failed(ReviewRejected).
+            var rejections = roundVerdicts
+                .Where(v => v.Verdict.Decision == VerdictDecision.Rejected)
+                .ToList();
+            if (rejections.Count > 0)
+            {
+                await FailAsync(
+                    context,
+                    run,
+                    FailureReason.ReviewRejected,
+                    Truncate(BuildRejectionDetail(rejections)),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            // 2. Unanimidad Approved → listo para Deciding (puente provisional hasta la Historia 3.3).
+            if (roundVerdicts.Count > 0 && roundVerdicts.All(v => v.Verdict.Decision == VerdictDecision.Approved))
+            {
+                await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            // 3. Al menos un ChangesRequested sin Rejected: iterar si quedan rondas o agotar rondas.
+            var changesRequested = roundVerdicts
+                .Where(v => v.Verdict.Decision == VerdictDecision.ChangesRequested)
+                .ToList();
+
+            if (changesRequested.Count == 0)
+            {
+                await FailAsync(context, run, FailureReason.StageError, "veredictos de revisión inválidos o vacíos", cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            if (round >= maxRounds)
+            {
+                await FailAsync(
+                    context,
+                    run,
+                    FailureReason.ReviewRoundsExhausted,
+                    Truncate(BuildRoundsExhaustedDetail(round, changesRequested)),
+                    cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
+            reviewFeedback = TextLimits.Truncate(BuildReviewFeedback(round, changesRequested), MaxFeedbackLength);
+            await log.AddTransitionAsync(context, run, run.StartReviewRound(), cancellationToken).ConfigureAwait(false);
+            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
     /// <summary>
     /// AD-8, AD-11, FR-14, FR-15: exporta <c>/workspace</c> desde el Sandbox, calcula el diff contra <c>BaseSha</c>
     /// en el clon del host, entra en <c>Reviewing</c>, crea una Etapa <c>Review</c> por Revisor activo y ejecuta los
-    /// Revisores en paralelo. Persiste <c>run_verdicts</c> y emite <see cref="VerdictRecorded"/>.
+    /// Revisores en paralelo. Persiste <c>run_verdicts</c> y emite <see cref="VerdictRecorded"/>. Devuelve los
+    /// Veredictos ya redactados de la ronda, o <c>null</c> si falló antes de revisar.
     /// </summary>
-    private async Task ReviewAsync(
+    private async Task<IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)>?> ReviewAsync(
         PipelineDbContext context,
         PipelineRun run,
         ISandboxSession sandbox,
@@ -496,7 +577,7 @@ internal sealed partial class RunOrchestrator(
         if (string.IsNullOrWhiteSpace(run.BaseSha))
         {
             await FailAsync(context, run, FailureReason.StageError, "la Ejecución no tiene BaseSha para calcular el diff", cancellationToken).ConfigureAwait(false);
-            return;
+            return null;
         }
 
         DiffResult diff;
@@ -520,7 +601,7 @@ internal sealed partial class RunOrchestrator(
         catch (Exception ex) when (ex is SandboxUnavailableException or RepositoryPreparationException or IOException)
         {
             await FailAsync(context, run, FailureReason.StageError, Truncate(DiffFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
-            return;
+            return null;
         }
 
         var boundedDiff = diff.Truncate(ReviewInput.MaxDiffLength);
@@ -556,12 +637,14 @@ internal sealed partial class RunOrchestrator(
             cancellationToken)).ToArray();
 
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        var roundVerdicts = new List<(ReviewerKind Reviewer, Verdict Verdict)>(stages.Count);
 
         for (var i = 0; i < stages.Count; i++)
         {
             var (kind, stage) = stages[i];
             var (reviewResult, completedAt) = results[i];
             var redactedVerdict = RedactVerdict(reviewResult.Verdict);
+            roundVerdicts.Add((kind, redactedVerdict));
 
             stage.CompletedAt = completedAt;
 
@@ -589,9 +672,7 @@ internal sealed partial class RunOrchestrator(
         }
 
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-
-        // Puente provisional hacia la Historia 3.2 (Rondas de revisión):
-        await FailAsync(context, run, FailureReason.StageError, Detail, cancellationToken).ConfigureAwait(false);
+        return roundVerdicts;
     }
 
     private async Task<(ReviewResult Result, DateTimeOffset CompletedAt)> RunReviewerSafeAsync(ReviewInput input, CancellationToken cancellationToken)
@@ -721,6 +802,60 @@ internal sealed partial class RunOrchestrator(
 
         return sb.Length > 0 ? sb.ToString() : "Los tests no han superado los criterios de aprobación.";
     }
+
+    internal static string? CombineFeedback(string? reviewFeedback, string? attemptFeedback)
+    {
+        if (string.IsNullOrEmpty(reviewFeedback))
+        {
+            return string.IsNullOrEmpty(attemptFeedback)
+                ? null
+                : TextLimits.Truncate(attemptFeedback, MaxFeedbackLength);
+        }
+
+        if (string.IsNullOrEmpty(attemptFeedback))
+        {
+            return TextLimits.Truncate(reviewFeedback, MaxFeedbackLength);
+        }
+
+        return TextLimits.Truncate($"{reviewFeedback}\n\n{attemptFeedback}", MaxFeedbackLength);
+    }
+
+    internal static string BuildReviewFeedback(int round, IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)> changesRequested)
+    {
+        var sb = new StringBuilder();
+        sb.Append($"Los Revisores han solicitado cambios en la ronda {round}:");
+        foreach (var (kind, verdict) in changesRequested)
+        {
+            sb.Append('\n');
+            sb.Append($"[{kind.ToString().ToLowerInvariant()}] {verdict.Summary.Trim()}");
+            foreach (var finding in verdict.Findings)
+            {
+                sb.Append('\n');
+                var location = finding.Line is > 0 ? $"{finding.File}:{finding.Line}" : finding.File;
+                sb.Append($"- ({finding.Severity}) {location}: {finding.Message.Trim()}");
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    internal static string BuildRejectionDetail(IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)> rejections)
+    {
+        var parts = rejections.Select(r => $"{r.Reviewer.ToString().ToLowerInvariant()}: {NormalizeSingleLine(r.Verdict.Summary)}");
+        return "Revisión rechazada: " + string.Join("; ", parts);
+    }
+
+    internal static string BuildRoundsExhaustedDetail(int rounds, IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)> changesRequested)
+    {
+        var parts = changesRequested.Select(r => $"{r.Reviewer.ToString().ToLowerInvariant()}: {NormalizeSingleLine(r.Verdict.Summary)}");
+        var detail = string.Join("; ", parts);
+        return string.IsNullOrEmpty(detail)
+            ? $"Rondas de revisión agotadas ({rounds}) sin aprobación unánime."
+            : $"Rondas de revisión agotadas ({rounds}): {detail}";
+    }
+
+    private static string NormalizeSingleLine(string value) =>
+        string.Join(' ', value.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
 
     private async Task FailAsync(PipelineDbContext context, PipelineRun run, FailureReason reason, string detail, CancellationToken cancellationToken)
     {

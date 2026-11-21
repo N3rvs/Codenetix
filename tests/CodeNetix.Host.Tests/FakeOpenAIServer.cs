@@ -38,6 +38,10 @@ internal sealed class FakeOpenAIServer : IAsyncDisposable
                 return Results.Json(new { error = new { message = ErrorMessage, type = "server_error" } }, statusCode: Status);
             }
 
+            var reply = body.Contains("Reviewer of CodeNetix", StringComparison.Ordinal)
+                ? ReviewerContent
+                : Content;
+
             return Results.Json(new
             {
                 id = "chatcmpl-test",
@@ -46,7 +50,7 @@ internal sealed class FakeOpenAIServer : IAsyncDisposable
                 model = "local-model",
                 choices = new[]
                 {
-                    new { index = 0, message = new { role = "assistant", content = Content }, finish_reason = "stop" },
+                    new { index = 0, message = new { role = "assistant", content = reply }, finish_reason = "stop" },
                 },
                 usage = new { prompt_tokens = 10, completion_tokens = 10, total_tokens = 20 },
             });
@@ -60,6 +64,8 @@ internal sealed class FakeOpenAIServer : IAsyncDisposable
     }
 
     public string Content { get; set; } = FakeChatClient.ValidAnalysisJson;
+
+    public string ReviewerContent { get; set; } = FakeChatClient.ValidVerdictJson;
 
     public int Status { get; set; } = StatusCodes.Status200OK;
 
