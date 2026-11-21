@@ -6,15 +6,18 @@ using Microsoft.Net.Http.Headers;
 namespace CodeNetix.Host.Access;
 
 /// <summary>
-/// Único middleware de autenticación (AD-17): <c>/api/**</c> y <c>/hubs/**</c> exigen
-/// <c>Authorization: Bearer &lt;admin-token&gt;</c>. Va antes del enrutado, así que un <c>/api</c>
-/// desconocido sin token da 401 y no 404. Única excepción: <c>GET /api/health</c>.
+/// Único middleware de autenticación (AD-17): <c>/api/**</c>, <c>/hubs/**</c> y <c>/openapi/**</c> exigen
+/// <c>Authorization: Bearer &lt;admin-token&gt;</c>. Solo en <c>/hubs/**</c> se acepta además el parámetro de
+/// consulta <c>access_token</c> (requerido por WebSocket/SSE de SignalR en navegador). Va antes del enrutado,
+/// así que un <c>/api</c> desconocido sin token da 401 y no 404. Única excepción: <c>GET /api/health</c>.
 /// </summary>
 internal sealed class AdminTokenMiddleware(RequestDelegate next, AdminTokenStore tokenStore)
 {
     public const string ApiPrefix = "/api";
     public const string HubsPrefix = "/hubs";
+    public const string OpenApiPrefix = "/openapi";
     public const string BearerScheme = "Bearer";
+    public const string AccessTokenQueryKey = "access_token";
 
     public Task InvokeAsync(HttpContext context)
     {
@@ -30,7 +33,8 @@ internal sealed class AdminTokenMiddleware(RequestDelegate next, AdminTokenStore
     {
         var path = request.Path;
         if (!path.StartsWithSegments(ApiPrefix, StringComparison.OrdinalIgnoreCase)
-            && !path.StartsWithSegments(HubsPrefix, StringComparison.OrdinalIgnoreCase))
+            && !path.StartsWithSegments(HubsPrefix, StringComparison.OrdinalIgnoreCase)
+            && !path.StartsWithSegments(OpenApiPrefix, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
@@ -59,6 +63,24 @@ internal sealed class AdminTokenMiddleware(RequestDelegate next, AdminTokenStore
             return false; // Sin token cargado se deniega todo.
         }
 
+        if (TryExtractBearerToken(request, out var bearerToken))
+        {
+            return TokenEquals(bearerToken, expectedToken);
+        }
+
+        // AD-17: solo /hubs/** admite ?access_token=<token> (nunca /api/** ni /openapi/**).
+        if (request.Path.StartsWithSegments(HubsPrefix, StringComparison.OrdinalIgnoreCase)
+            && TryExtractQueryAccessToken(request, out var queryToken))
+        {
+            return TokenEquals(queryToken, expectedToken);
+        }
+
+        return false;
+    }
+
+    private static bool TryExtractBearerToken(HttpRequest request, out string token)
+    {
+        token = string.Empty;
         var headers = request.Headers.Authorization;
         if (headers.Count != 1 || headers[0] is not { } header)
         {
@@ -78,10 +100,36 @@ internal sealed class AdminTokenMiddleware(RequestDelegate next, AdminTokenStore
             return false;
         }
 
+        token = presented.ToString();
+        return true;
+    }
+
+    private static bool TryExtractQueryAccessToken(HttpRequest request, out string token)
+    {
+        token = string.Empty;
+        if (!request.Query.TryGetValue(AccessTokenQueryKey, out var values)
+            || values.Count != 1
+            || values[0] is not { } raw)
+        {
+            return false;
+        }
+
+        var presented = raw.AsSpan().Trim();
+        if (presented.IsEmpty)
+        {
+            return false;
+        }
+
+        token = presented.ToString();
+        return true;
+    }
+
+    private static bool TokenEquals(string presented, string expectedToken)
+    {
         // Comparación en tiempo constante sobre resúmenes de igual longitud: tampoco se filtra la longitud.
         Span<byte> presentedHash = stackalloc byte[SHA256.HashSizeInBytes];
         Span<byte> expectedHash = stackalloc byte[SHA256.HashSizeInBytes];
-        SHA256.HashData(Encoding.UTF8.GetBytes(presented.ToString()), presentedHash);
+        SHA256.HashData(Encoding.UTF8.GetBytes(presented), presentedHash);
         SHA256.HashData(Encoding.UTF8.GetBytes(expectedToken), expectedHash);
         return CryptographicOperations.FixedTimeEquals(presentedHash, expectedHash);
     }

@@ -64,7 +64,9 @@ internal sealed partial class SecretRedactor : ISecretRedactor
             return value;
         }
 
-        var result = value;
+        // Redactar completamente cualquier access_token en query strings antes de enmascarar secretos conocidos,
+        // para no dejar visibles ni siquiera los últimos 4 caracteres ni depender del prefijo cnx_.
+        var result = AccessTokenQueryPattern().Replace(value, "$1***");
         foreach (var (secret, mask) in _knownSecrets)
         {
             if (result.Contains(secret, StringComparison.Ordinal))
@@ -104,6 +106,10 @@ internal sealed partial class SecretRedactor : ISecretRedactor
             }
         }
     }
+
+    // Parámetro de consulta access_token (p. ej. WebSocket/SSE de SignalR en /hubs/**): se oculta por completo.
+    [GeneratedRegex(@"([?&]access_token=)[^&\s""'<>]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AccessTokenQueryPattern();
 
     // sk-ant-…, sk-… (Anthropic, OpenAI y compatibles), ghp_/gho_/ghu_/ghs_/ghr_… y github_pat_… (GitHub),
     // cnx_… (admin-token de CodeNetix). Longitud mínima para no tocar palabras corrientes como "sk-learn".

@@ -9,6 +9,21 @@ namespace CodeNetix.Pipeline.Features.GetRun;
 /// <summary>Consultas de lectura de <c>run_runs</c>, <c>run_events</c> y <c>run_specs</c> (<c>GET /api/runs/…</c>).</summary>
 internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFactory) : IRunReader
 {
+    public async Task<IReadOnlyList<RunSummary>> ListRecentAsync(int limit, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await context.Runs
+            .AsNoTracking()
+            .OrderByDescending(r => r.CreatedAt)
+            .Take(limit)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. rows.Select(r => new RunSummary(r.Id, r.ShortId, r.State, r.FailureReason, r.FailureDetail, r.EventId, r.ObjectKey, r.CreatedAt, r.UpdatedAt))];
+    }
+
     public async Task<RunSummary?> FindAsync(string id, CancellationToken cancellationToken)
     {
         var trimmed = id?.Trim() ?? string.Empty;

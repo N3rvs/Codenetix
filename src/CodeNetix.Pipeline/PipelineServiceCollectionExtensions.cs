@@ -27,6 +27,7 @@ public static class PipelineServiceCollectionExtensions
             PipelineDbContext.Configure(options, sp.GetRequiredService<IDatabaseConnection>().ConnectionString));
 
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IRunEventPublisher, NullRunEventPublisher>();
         services.AddSingleton<IModuleDatabase, PipelineModuleDatabase>();
         services.AddSingleton<RunEventLog>();
         services.AddSingleton<IRunEventSink, RunEventSink>();

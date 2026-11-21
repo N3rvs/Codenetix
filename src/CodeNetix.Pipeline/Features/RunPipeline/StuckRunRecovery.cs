@@ -52,7 +52,7 @@ internal sealed class StuckRunRecovery(
 
         var change = run.Fail(FailureReason.StageError, DetailPrefix + ShortReason(error));
         await log.AddTransitionAsync(context, run, change, cancellationToken).ConfigureAwait(false);
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
 
         if (GitHubObjectKey.TryParse(run.ObjectKey, out var owner, out var repo, out var number))
         {

@@ -1,0 +1,1843 @@
+{
+  "openapi": "3.1.1",
+  "info": {
+    "title": "codenetix | v1",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:5000/"
+    }
+  ],
+  "paths": {
+    "/api/health": {
+      "get": {
+        "tags": [
+          "codenetix"
+        ],
+        "operationId": "GetHealth",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      },
+      "head": {
+        "tags": [
+          "codenetix"
+        ],
+        "operationId": "GetHealth",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/events/manual": {
+      "post": {
+        "tags": [
+          "SubmitManualEventEndpoint"
+        ],
+        "operationId": "SubmitManualEvent",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/events/{eventId}": {
+      "get": {
+        "tags": [
+          "GetEventEndpoint"
+        ],
+        "operationId": "GetEvent",
+        "parameters": [
+          {
+            "name": "eventId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/runs": {
+      "get": {
+        "tags": [
+          "ListRunsEndpoint"
+        ],
+        "operationId": "ListRuns",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}": {
+      "get": {
+        "tags": [
+          "GetRunEndpoint"
+        ],
+        "operationId": "GetRun",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/runs/{id}/events": {
+      "get": {
+        "tags": [
+          "GetRunEventsEndpoint"
+        ],
+        "operationId": "GetRunEvents",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "afterSeq",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RunEvent"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ConfigSource": {
+        "enum": [
+          "file",
+          "defaults"
+        ]
+      },
+      "FailureReason": {
+        "enum": [
+          "InvalidRepoConfig",
+          "CloneFailed",
+          "NotAutomatable",
+          "SchemaInvalid",
+          "TestsFailed",
+          "ReviewRejected",
+          "ReviewRoundsExhausted",
+          "BudgetExceeded",
+          "Timeout",
+          "HostRestarted",
+          "StageError",
+          null
+        ]
+      },
+      "NotAutomatableCategory": {
+        "enum": [
+          "missing_information",
+          "too_large",
+          "out_of_scope"
+        ]
+      },
+      "NotificationKind": {
+        "enum": [
+          "NotAutomatable",
+          "PullRequestCreated",
+          "RunFailed",
+          "RunCancelled"
+        ]
+      },
+      "ProblemDetails": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "title": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "status": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "instance": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "PullRequestInfo": {
+        "required": [
+          "number",
+          "url",
+          "branchName",
+          "commitSha",
+          "title",
+          "createdAt"
+        ],
+        "type": "object",
+        "properties": {
+          "number": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "url": {
+            "type": "string"
+          },
+          "branchName": {
+            "type": "string"
+          },
+          "commitSha": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ReviewFinding": {
+        "required": [
+          "severity",
+          "file",
+          "line",
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "line": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "null",
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ReviewerKind": {
+        "enum": [
+          "security",
+          "quality",
+          "tests"
+        ]
+      },
+      "RiskClass": {
+        "enum": [
+          "Minor",
+          "NeedsAttention"
+        ]
+      },
+      "RunEvent": {
+        "required": [
+          "type"
+        ],
+        "type": "object",
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/RunEventRunCreated"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventStateChanged"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventRepositoryPrepared"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventRepoConfigResolved"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventAnalystOutputRejected"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventSpecGenerated"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventAnalysisRejected"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventIssueCommented"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventNotificationFailed"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventSandboxCreated"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventSandboxReleased"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventTokensConsumed"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventEgressBlocked"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventOutputAppended"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventOutputTruncated"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventCodingAttemptFailed"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventReviewerOutputRejected"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventVerdictRecorded"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventRiskClassified"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventPullRequestOpened"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "type",
+          "mapping": {
+            "RunCreated": "#/components/schemas/RunEventRunCreated",
+            "StateChanged": "#/components/schemas/RunEventStateChanged",
+            "RepositoryPrepared": "#/components/schemas/RunEventRepositoryPrepared",
+            "RepoConfigResolved": "#/components/schemas/RunEventRepoConfigResolved",
+            "AnalystOutputRejected": "#/components/schemas/RunEventAnalystOutputRejected",
+            "SpecGenerated": "#/components/schemas/RunEventSpecGenerated",
+            "AnalysisRejected": "#/components/schemas/RunEventAnalysisRejected",
+            "IssueCommented": "#/components/schemas/RunEventIssueCommented",
+            "NotificationFailed": "#/components/schemas/RunEventNotificationFailed",
+            "SandboxCreated": "#/components/schemas/RunEventSandboxCreated",
+            "SandboxReleased": "#/components/schemas/RunEventSandboxReleased",
+            "TokensConsumed": "#/components/schemas/RunEventTokensConsumed",
+            "EgressBlocked": "#/components/schemas/RunEventEgressBlocked",
+            "OutputAppended": "#/components/schemas/RunEventOutputAppended",
+            "OutputTruncated": "#/components/schemas/RunEventOutputTruncated",
+            "CodingAttemptFailed": "#/components/schemas/RunEventCodingAttemptFailed",
+            "ReviewerOutputRejected": "#/components/schemas/RunEventReviewerOutputRejected",
+            "VerdictRecorded": "#/components/schemas/RunEventVerdictRecorded",
+            "RiskClassified": "#/components/schemas/RunEventRiskClassified",
+            "PullRequestOpened": "#/components/schemas/RunEventPullRequestOpened"
+          }
+        }
+      },
+      "RunEventAnalysisRejected": {
+        "required": [
+          "category",
+          "attempts",
+          "model"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "AnalysisRejected"
+            ],
+            "type": "string"
+          },
+          "category": {
+            "$ref": "#/components/schemas/NotAutomatableCategory"
+          },
+          "attempts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "model": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventAnalystOutputRejected": {
+        "required": [
+          "attempt",
+          "error"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "AnalystOutputRejected"
+            ],
+            "type": "string"
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "error": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventCodingAttemptFailed": {
+        "required": [
+          "attempt",
+          "reason"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "CodingAttemptFailed"
+            ],
+            "type": "string"
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventEgressBlocked": {
+        "required": [
+          "target",
+          "reason"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "EgressBlocked"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventIssueCommented": {
+        "required": [
+          "kind",
+          "commentUrl"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "IssueCommented"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
+          },
+          "commentUrl": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventNotificationFailed": {
+        "required": [
+          "kind",
+          "error"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "NotificationFailed"
+            ],
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NotificationKind"
+          },
+          "error": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventOutputAppended": {
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "OutputAppended"
+            ],
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "stream": {
+            "type": "string",
+            "default": "stdout"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventOutputTruncated": {
+        "properties": {
+          "type": {
+            "enum": [
+              "OutputTruncated"
+            ],
+            "type": "string"
+          },
+          "maxBytes": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32",
+            "default": 5242880
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventPullRequestOpened": {
+        "required": [
+          "number",
+          "url",
+          "branch",
+          "commitSha"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "PullRequestOpened"
+            ],
+            "type": "string"
+          },
+          "number": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "url": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "commitSha": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventRepoConfigResolved": {
+        "required": [
+          "source"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "RepoConfigResolved"
+            ],
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/ConfigSource"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventRepositoryPrepared": {
+        "required": [
+          "baseSha"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "RepositoryPrepared"
+            ],
+            "type": "string"
+          },
+          "baseSha": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventReviewerOutputRejected": {
+        "required": [
+          "round",
+          "reviewer",
+          "attempt",
+          "error"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "ReviewerOutputRejected"
+            ],
+            "type": "string"
+          },
+          "round": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "reviewer": {
+            "$ref": "#/components/schemas/ReviewerKind"
+          },
+          "attempt": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "error": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventRiskClassified": {
+        "required": [
+          "riskClass",
+          "diffLines",
+          "matchedProtectedPaths"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "RiskClassified"
+            ],
+            "type": "string"
+          },
+          "riskClass": {
+            "$ref": "#/components/schemas/RiskClass"
+          },
+          "diffLines": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "matchedProtectedPaths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventRunCreated": {
+        "required": [
+          "eventId",
+          "objectKey"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "RunCreated"
+            ],
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "objectKey": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventSandboxCreated": {
+        "required": [
+          "image"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "SandboxCreated"
+            ],
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventSandboxReleased": {
+        "properties": {
+          "type": {
+            "enum": [
+              "SandboxReleased"
+            ],
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventSpecGenerated": {
+        "required": [
+          "attempts",
+          "model"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "SpecGenerated"
+            ],
+            "type": "string"
+          },
+          "attempts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "model": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventStateChanged": {
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "StateChanged"
+            ],
+            "type": "string"
+          },
+          "from": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunState"
+              }
+            ]
+          },
+          "to": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "failureReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FailureReason"
+              }
+            ]
+          },
+          "detail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventTokensConsumed": {
+        "required": [
+          "role",
+          "provider",
+          "model",
+          "inputTokens",
+          "outputTokens"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "TokensConsumed"
+            ],
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "inputTokens": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "outputTokens": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventVerdictRecorded": {
+        "required": [
+          "round",
+          "reviewer",
+          "decision",
+          "findingCount",
+          "model"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "VerdictRecorded"
+            ],
+            "type": "string"
+          },
+          "round": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "reviewer": {
+            "$ref": "#/components/schemas/ReviewerKind"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/VerdictDecision"
+          },
+          "findingCount": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "model": {
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunResponse": {
+        "required": [
+          "runId",
+          "shortId",
+          "state",
+          "failureReason",
+          "failureDetail",
+          "eventId",
+          "objectKey",
+          "createdAt",
+          "updatedAt",
+          "spec",
+          "testReport",
+          "verdicts",
+          "pullRequest",
+          "events"
+        ],
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "shortId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "failureReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FailureReason"
+              }
+            ]
+          },
+          "failureDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "objectKey": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "spec": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Spec"
+              }
+            ]
+          },
+          "testReport": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TestReport"
+              }
+            ]
+          },
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunVerdict"
+            }
+          },
+          "pullRequest": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PullRequestInfo"
+              }
+            ]
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunEvent"
+            }
+          }
+        }
+      },
+      "RunState": {
+        "enum": [
+          "Received",
+          "Analyzing",
+          "Coding",
+          "Reviewing",
+          "Deciding",
+          "PullRequestCreated",
+          "Failed",
+          "Cancelled"
+        ]
+      },
+      "RunSummary": {
+        "required": [
+          "runId",
+          "shortId",
+          "state",
+          "failureReason",
+          "failureDetail",
+          "eventId",
+          "objectKey",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "shortId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "failureReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/FailureReason"
+              }
+            ]
+          },
+          "failureDetail": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "objectKey": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunVerdict": {
+        "required": [
+          "stageId",
+          "round",
+          "reviewer",
+          "decision",
+          "summary",
+          "model",
+          "attempts",
+          "createdAt",
+          "findings"
+        ],
+        "type": "object",
+        "properties": {
+          "stageId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "round": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "reviewer": {
+            "$ref": "#/components/schemas/ReviewerKind"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/VerdictDecision"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "attempts": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReviewFinding"
+            }
+          }
+        }
+      },
+      "Spec": {
+        "required": [
+          "problem",
+          "probableCause",
+          "proposedChange",
+          "acceptanceCriteria",
+          "affectedFiles"
+        ],
+        "type": "object",
+        "properties": {
+          "problem": {
+            "type": "string"
+          },
+          "probableCause": {
+            "type": "string"
+          },
+          "proposedChange": {
+            "type": "string"
+          },
+          "acceptanceCriteria": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "affectedFiles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "TestCaseResult": {
+        "required": [
+          "name",
+          "outcome"
+        ],
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "errorMessage": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "stackTrace": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "TestReport": {
+        "required": [
+          "buildSucceeded",
+          "totalTests",
+          "passedTests",
+          "failedTests",
+          "skippedTests",
+          "newTests",
+          "failedTestCases",
+          "duration"
+        ],
+        "type": "object",
+        "properties": {
+          "buildSucceeded": {
+            "type": "boolean"
+          },
+          "totalTests": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "passedTests": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "failedTests": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "skippedTests": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "newTests": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "failedTestCases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TestCaseResult"
+            }
+          },
+          "duration": {
+            "pattern": "^-?(\\d+\\.)?\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,7})?$",
+            "type": "string"
+          },
+          "buildOutput": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "passed": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VerdictDecision": {
+        "enum": [
+          "approved",
+          "changes_requested",
+          "rejected"
+        ]
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "codenetix"
+    },
+    {
+      "name": "SubmitManualEventEndpoint"
+    },
+    {
+      "name": "GetEventEndpoint"
+    },
+    {
+      "name": "ListRunsEndpoint"
+    },
+    {
+      "name": "GetRunEndpoint"
+    },
+    {
+      "name": "GetRunEventsEndpoint"
+    }
+  ]
+}

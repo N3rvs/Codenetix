@@ -6,16 +6,33 @@ using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Domain;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace CodeNetix.Pipeline.Events;
+
+/// <summary>Implementación vacía por defecto para pruebas aisladas de Pipeline sin Host/SignalR.</summary>
+internal sealed class NullRunEventPublisher : IRunEventPublisher
+{
+    public Task PublishAsync(RunEvent runEvent, CancellationToken cancellationToken) => Task.CompletedTask;
+}
 
 /// <summary>
 /// Sumidero interno (AD-3): añade un <see cref="RunEvent"/> al <see cref="PipelineDbContext"/> que se le pasa,
 /// sin guardar, con <c>seq</c> = máximo (persistido o pendiente en el contexto) + 1. Así la transición y su
 /// evento se confirman en el mismo <c>SaveChanges</c>. El JSON pasa por <see cref="ISecretRedactor"/>.
+/// Tras confirmar en SQLite, <see cref="SaveAndPublishAsync"/> publica los eventos recién guardados mediante
+/// <see cref="IRunEventPublisher"/> sin revertir ni interrumpir nunca la Ejecución.
 /// </summary>
-internal sealed class RunEventLog(ISecretRedactor redactor, TimeProvider timeProvider)
+internal sealed partial class RunEventLog(
+    ISecretRedactor redactor,
+    TimeProvider timeProvider,
+    IRunEventPublisher? publisher = null,
+    ILogger<RunEventLog>? logger = null)
 {
+    private readonly IRunEventPublisher _publisher = publisher ?? new NullRunEventPublisher();
+    private readonly ILogger<RunEventLog> _logger = logger ?? NullLogger<RunEventLog>.Instance;
+
     public DateTimeOffset UtcNow => timeProvider.GetUtcNow();
 
     internal ISecretRedactor Redactor => redactor;
@@ -73,6 +90,43 @@ internal sealed class RunEventLog(ISecretRedactor redactor, TimeProvider timePro
         // Se devuelve lo que se persiste (ya redactado).
         return RunEventJson.Deserialize(json, stamped.RunId, stamped.Seq, stamped.At, effectiveStageId);
     }
+
+    /// <summary>
+    /// Confirma <paramref name="context"/> en SQLite y, únicamente tras el commit, publica cada
+    /// <see cref="RunEvent"/> nuevo a través de <see cref="IRunEventPublisher"/> (AD-3).
+    /// Un fallo al publicar se registra y nunca revierte ni rompe la Ejecución.
+    /// </summary>
+    public async Task<int> SaveAndPublishAsync(PipelineDbContext context, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        var pending = context.ChangeTracker.Entries<RunEventRecord>()
+            .Where(e => e.State == EntityState.Added)
+            .Select(e => e.Entity)
+            .OrderBy(e => e.RunId)
+            .ThenBy(e => e.Seq)
+            .ToList();
+
+        var saved = await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        foreach (var record in pending)
+        {
+            try
+            {
+                var runEvent = RunEventJson.Deserialize(record.PayloadJson, record.RunId, record.Seq, record.At, record.StageId);
+                await _publisher.PublishAsync(runEvent, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LogPublishFailed(_logger, RunShortId.Of(record.RunId), record.Seq, record.Type, ex.Message);
+            }
+        }
+
+        return saved;
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido publicar el evento {EventType} (#{Seq}) de la Ejecución {ShortId}: {Reason}.")]
+    private static partial void LogPublishFailed(ILogger logger, string shortId, long seq, string eventType, string reason);
 
     private const int SqliteConstraint = 19;
 
@@ -250,7 +304,7 @@ internal sealed class RunEventSink(
             var appended = await log.AddAsync(context, runId, payload, cancellationToken, stageId).ConfigureAwait(false);
             try
             {
-                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
                 return appended;
             }
             catch (DbUpdateException ex) when (attempt < MaxAttempts && RunEventLog.IsUniqueViolation(ex))
