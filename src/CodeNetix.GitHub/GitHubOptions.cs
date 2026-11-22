@@ -12,6 +12,12 @@ public sealed class GitHubOptions
     /// <summary><c>CODENETIX__GitHub__Token</c>. Nunca se registra ni aparece en excepciones.</summary>
     public string? Token { get; set; }
 
+    /// <summary>
+    /// <c>CODENETIX__GitHub__Login</c>: login del bot dueño de <see cref="Token"/>. Si tiene valor, la identidad no llama a
+    /// <c>GET /user</c> (un <c>GITHUB_TOKEN</c> de Actions no puede; <c>codenetix action</c> usa <c>github-actions[bot]</c>).
+    /// </summary>
+    public string? Login { get; set; }
+
     /// <summary><c>CODENETIX__GitHub__ApiUrl</c>: API de GitHub (o de GitHub Enterprise, p. ej. <c>https://ghe.example.com/api/v3</c>).</summary>
     public string ApiUrl { get; set; } = DefaultApiUrl;
 

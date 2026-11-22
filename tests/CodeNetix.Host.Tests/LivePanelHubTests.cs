@@ -415,7 +415,8 @@ public sealed class LivePanelHubTests : IDisposable
             .Where(e => e.Seq >= firstBatch[0] && e.Seq <= afterReconnectBatch[^1])
             .OrderBy(e => e.Seq)
             .ToList();
-        Assert.Equal(expectedSeqs.Distinct().Count(), mergedSlice.Select(e => e.Seq).Distinct().Count());
+        // El orquestador intercala sus propios eventos: el tramo [primero, último] debe estar completo, no medir solo los del test.
+        Assert.Equal(afterReconnectBatch[^1] - firstBatch[0] + 1, mergedSlice.Select(e => e.Seq).Distinct().LongCount());
         for (var i = 1; i < mergedSlice.Count; i++)
         {
             Assert.Equal(mergedSlice[i - 1].Seq + 1, mergedSlice[i].Seq);

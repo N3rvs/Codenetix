@@ -55,3 +55,7 @@
   summary: `ClaudeCodeAgent.BuildCommand` todavía no pasa `--max-budget-usd <restante>` al CLI de Claude Code (AD-5, AD-15).
   evidence: El presupuesto restante depende de `IBudgetLedger`, que se implementa en la Épica 5 (historia 5.2). Añadir la bandera en cuanto exista el libro de presupuesto. Severidad medium.
   resolved: Historia 5.2 — `ClaudeCodeAgent` consulta `IBudgetLedger.GetRunCostAsync`, calcula el presupuesto restante respecto a `EffectiveConfig.BudgetUsd` y pasa `--max-budget-usd <restante>` (`CultureInfo.InvariantCulture`) en `BuildCommand` (devolviendo `CodingResult.BudgetExhausted` si el restante es `<= 0`).
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-6-1-modo-codenetix-action.md`
+  summary: Al cancelar el job, el runner mata el proceso en ~10 s pero `action` espera hasta 30 s al parar; en runners self-hosted pueden quedar Sandbox y carpeta temporal.
+  evidence: Parar en ~5 s y liberar el Sandbox antes de la parada general; tratarlo junto con la cancelación en 6.2. Severidad low.

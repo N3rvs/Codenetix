@@ -28,6 +28,16 @@ public interface IEventDispatchSignal
     void Notify();
 }
 
+/// <summary>
+/// Aviso de que el Dispatcher de Pipeline ha terminado de orquestar una Ejecución: el orquestador ha vuelto (avisos en la
+/// issue y liberación del Sandbox incluidos) o ha lanzado y la Ejecución se ha intentado cerrar. Lo usa
+/// <c>codenetix action</c> para saber cuándo puede terminar el proceso. No debe bloquear ni lanzar.
+/// </summary>
+public interface IRunCompletionObserver
+{
+    void OnOrchestrationCompleted(Guid runId);
+}
+
 /// <summary>Estado de un Evento tal como lo ve la API; <see cref="RunId"/> solo si ya se ha despachado.</summary>
 public sealed record EventStatusInfo(Guid EventId, EventStatus Status, string? Reason, Guid? RunId);
 

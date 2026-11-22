@@ -18,7 +18,7 @@ internal sealed partial class SecretRedactor : ISecretRedactor
 
     private static readonly HashSet<string> SecretKeyNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ApiKey", "Token", "AuthToken", "AccessToken", "Secret", "WebhookSecret", "Password",
+        "ApiKey", "Token", "AuthToken", "AccessToken", "Secret", "WebhookSecret", "Password", "GITHUB_TOKEN",
     };
 
     /// <summary>Pares (texto a buscar, máscara), del más largo al más corto.</summary>
