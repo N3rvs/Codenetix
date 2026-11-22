@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using CodeNetix.Contracts;
+using CodeNetix.Host.Features.CancelRun;
 using CodeNetix.Host.Features.GetRun;
 using Microsoft.Data.Sqlite;
 
@@ -82,6 +83,7 @@ public sealed class OpenApiContractTests : IDisposable
         Assert.True(paths.ContainsKey("/api/runs"), "Falta '/api/runs' en OpenAPI.");
         Assert.True(paths.ContainsKey("/api/runs/{id}"), "Falta '/api/runs/{id}' en OpenAPI.");
         Assert.True(paths.ContainsKey("/api/runs/{id}/events"), "Falta '/api/runs/{id}/events' en OpenAPI.");
+        Assert.True(paths.ContainsKey("/api/runs/{id}/cancel"), "Falta '/api/runs/{id}/cancel' en OpenAPI.");
 
         var schemas = doc["components"]?["schemas"]?.AsObject()
             ?? throw new InvalidOperationException("Falta 'components.schemas' en /openapi/v1.json.");
@@ -192,6 +194,20 @@ public sealed class OpenApiContractTests : IDisposable
         var serializedFailedRunResponse = JsonSerializer.SerializeToNode(failedRunResponse, WebJson)?.AsObject()
             ?? throw new InvalidOperationException("No se pudo serializar RunResponse fallido.");
         ValidateObjectAgainstSchema(serializedFailedRunResponse, runResponseSchema, schemas, $"{nameof(RunResponse)}(Failed)");
+
+        // Validar CancelRunResponse contra POST /api/runs/{id}/cancel -> 202.
+        var cancelRunResponseSchema = ResolveSchema(
+            paths["/api/runs/{id}/cancel"]?["post"]?["responses"]?["202"]?["content"]?["application/json"]?["schema"]?.AsObject()
+                ?? throw new InvalidOperationException("Falta el esquema de respuesta 202 de POST /api/runs/{id}/cancel."),
+            schemas);
+        var sampleCancelResponse = new CancelRunResponse(
+            detailRunId,
+            "11111111",
+            RunState.Coding,
+            CancellationRequested: true);
+        var serializedCancelResponse = JsonSerializer.SerializeToNode(sampleCancelResponse, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar CancelRunResponse.");
+        ValidateObjectAgainstSchema(serializedCancelResponse, cancelRunResponseSchema, schemas, nameof(CancelRunResponse));
 
         // Localizar el esquema del elemento de GET /api/runs/{id}/events -> 200 -> application/json.
         var eventsArraySchema = paths["/api/runs/{id}/events"]?["get"]?["responses"]?["200"]?["content"]?["application/json"]?["schema"]?.AsObject()

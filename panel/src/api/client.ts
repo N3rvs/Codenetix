@@ -1,4 +1,11 @@
-import type { ProblemDetails, RunEvent, RunResponse, RunSummary } from './generated'
+import type {
+  CancelRunResponse,
+  ProblemDetails,
+  RunEvent,
+  RunResponse,
+  RunState,
+  RunSummary,
+} from './generated'
 
 export const ADMIN_TOKEN_STORAGE_KEY = 'codenetix.adminToken'
 
@@ -151,6 +158,40 @@ export async function fetchRunEvents(
   }
 
   return (await response.json()) as RunEvent[]
+}
+
+export function isRunCancellable(state: RunState): boolean {
+  return (
+    state === 'Received' ||
+    state === 'Analyzing' ||
+    state === 'Coding' ||
+    state === 'Reviewing'
+  )
+}
+
+export async function cancelRun(
+  token: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CancelRunResponse> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    signal,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (response.status === 401) {
+    throw new UnauthorizedError()
+  }
+
+  if (!response.ok) {
+    throw new Error(await readProblemDetail(response))
+  }
+
+  return (await response.json()) as CancelRunResponse
 }
 
 /**

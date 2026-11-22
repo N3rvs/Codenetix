@@ -3,6 +3,7 @@ using CodeNetix.Contracts;
 using CodeNetix.GitHub;
 using CodeNetix.Host.Access;
 using CodeNetix.Host.Configuration;
+using CodeNetix.Host.Features.CancelRun;
 using CodeNetix.Host.Features.GetEvent;
 using CodeNetix.Host.Features.GetHealth;
 using CodeNetix.Host.Features.GetRun;
@@ -155,6 +156,7 @@ internal static class ServeMode
         app.MapListRuns();
         app.MapGetRun();
         app.MapGetRunEvents();
+        app.MapCancelRun();
         app.MapHub<RunsHub>(RunsHub.Route);
 
         // /api, /hubs y /openapi desconocidos -> 404 (ProblemDetails), nunca index.html.

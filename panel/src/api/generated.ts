@@ -1,6 +1,13 @@
 // Archivo generado automáticamente desde /openapi/v1.json (AD-14). No editar a mano.
 // Regenerar con: npm run generate:api
 
+export interface CancelRunResponse {
+  runId: string
+  shortId: string
+  state: RunState
+  cancellationRequested: boolean
+}
+
 export type ConfigSource = "file" | "defaults"
 
 export type FailureReason = "InvalidRepoConfig" | "CloneFailed" | "NotAutomatable" | "SchemaInvalid" | "TestsFailed" | "ReviewRejected" | "ReviewRoundsExhausted" | "BudgetExceeded" | "Timeout" | "HostRestarted" | "StageError" | null

@@ -221,3 +221,30 @@ public interface IRunReader
     /// <summary>Veredictos persistidos de la Ejecución (<c>run_verdicts</c>), ordenados por ronda y revisor.</summary>
     Task<IReadOnlyList<RunVerdict>> GetVerdictsAsync(Guid runId, CancellationToken cancellationToken);
 }
+
+/// <summary>Resultado de solicitar la cancelación de una Ejecución (FR-23, AD-2).</summary>
+public enum CancelRunOutcome
+{
+    Accepted,
+    NotFound,
+    Conflict,
+}
+
+/// <summary>Resultado detallado de <see cref="IRunControl.RequestCancelAsync"/>.</summary>
+public sealed record CancelRunResult(
+    CancelRunOutcome Outcome,
+    Guid? RunId = null,
+    string? ShortId = null,
+    RunState? State = null,
+    string? Detail = null);
+
+/// <summary>Control de ciclo de vida de Ejecuciones (implementado por Pipeline).</summary>
+public interface IRunControl
+{
+    /// <summary>
+    /// Solicita la cancelación segura de la Ejecución identificada por GUID o <c>shortId</c> de 8 caracteres.
+    /// Solo es cancelable en <c>Received</c>, <c>Analyzing</c>, <c>Coding</c> y <c>Reviewing</c>;
+    /// devuelve <see cref="CancelRunOutcome.Conflict"/> en <c>Deciding</c> o estados terminales.
+    /// </summary>
+    Task<CancelRunResult> RequestCancelAsync(string id, CancellationToken cancellationToken);
+}

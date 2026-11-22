@@ -128,6 +128,24 @@ a {
   font-weight: 600;
 }
 
+.btn-danger {
+  background: var(--danger-soft);
+  border-color: rgba(248, 113, 113, 0.5);
+  color: #fecaca;
+  font-weight: 600;
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: rgba(248, 113, 113, 0.25);
+  border-color: var(--danger);
+  color: #ffffff;
+}
+
+.btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .error-banner {
   padding: 0.75rem 0.9rem;
   border-radius: 8px;
@@ -315,6 +333,13 @@ a {
   font-size: 0.8rem;
   color: var(--text-muted);
   margin-top: 0.2rem;
+}
+
+.run-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-shrink: 0;
 }
 
 .graph-container {
