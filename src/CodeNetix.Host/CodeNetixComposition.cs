@@ -5,6 +5,7 @@ using CodeNetix.Host.Access;
 using CodeNetix.Host.Configuration;
 using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
+using CodeNetix.Ingestion.Features.PollGitHub;
 using CodeNetix.Persistence;
 using CodeNetix.Pipeline;
 using CodeNetix.Pipeline.Features.Budget;
@@ -91,6 +92,15 @@ internal static class CodeNetixComposition
             });
         builder.Services.Configure<InstanceLimits>(builder.Configuration.GetSection(LimitsInstanceOptions.SectionName));
         builder.Services.Configure<InstanceOptions>(builder.Configuration.GetSection(InstanceOptions.SectionName));
+
+        // CODENETIX__Polling__Repositories admite una cadena con comas, que el binder de colecciones no separa.
+        builder.Services.AddOptions<InstanceOptions>()
+            .PostConfigure<IConfiguration>((instance, configuration) =>
+            {
+                instance.Polling ??= new PollingInstanceOptions();
+                var repositories = configuration.GetSection(PollingInstanceOptions.RepositoriesKey);
+                instance.Polling.Repositories = repositories.Exists() ? PollingInstanceOptions.ReadRepositories(repositories) : [];
+            });
         builder.Services.AddOptions<PricingOptions>()
             .Configure<IOptions<InstanceOptions>>((pricing, instance) =>
             {
@@ -151,6 +161,35 @@ internal static class CodeNetixComposition
         builder.Services.AddSingleton<IInstanceHealth>(sp => sp.GetRequiredService<InstanceHealth>());
         builder.Services.AddSingleton<AdminTokenStore>();
         builder.Services.AddHostedService<StartupReconciler>();
+    }
+
+    /// <summary>
+    /// Sondeo de issues etiquetadas (FR-6), solo en <c>serve</c>: <see cref="GitHubPollingOptions"/> desde
+    /// <c>CODENETIX__Polling__*</c> (owner/repo en minúsculas y sin duplicados; los inválidos ya dejan la instancia en
+    /// <c>Diagnostic</c>, donde no se sondea) y el servicio de Ingestion.
+    /// </summary>
+    public static void AddGitHubPolling(this WebApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.AddCodeNetixGitHubPolling();
+        builder.Services.AddOptions<GitHubPollingOptions>()
+            .Configure<IOptions<InstanceOptions>>((polling, instance) =>
+            {
+                var source = instance.Value.Polling ?? new PollingInstanceOptions();
+                polling.Repositories.Clear();
+                foreach (var value in source.Repositories ?? [])
+                {
+                    if (PollingInstanceOptions.TryParseRepository(value, out var owner, out var repo)
+                        && !polling.Repositories.Any(r => r.Owner == owner && r.Repo == repo))
+                    {
+                        polling.Repositories.Add(new PolledRepository(owner, repo));
+                    }
+                }
+
+                polling.Label = source.EffectiveLabel;
+                polling.Interval = TimeSpan.FromSeconds(source.IntervalSeconds);
+            });
     }
 
     private static List<string> ReadConfiguredHosts(IConfigurationSection section)

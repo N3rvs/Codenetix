@@ -1,6 +1,7 @@
 using CodeNetix.Contracts;
 using CodeNetix.Ingestion.Data;
 using CodeNetix.Ingestion.Features.DispatchEvents;
+using CodeNetix.Ingestion.Features.PollGitHub;
 using CodeNetix.Ingestion.Features.SubmitGitHubActionEvent;
 using CodeNetix.Ingestion.Features.SubmitManualEvent;
 using Microsoft.EntityFrameworkCore;
@@ -30,6 +31,22 @@ public static class IngestionServiceCollectionExtensions
         services.AddSingleton<AcceptedEventSource>();
         services.AddSingleton<IAcceptedEventSource>(sp => sp.GetRequiredService<AcceptedEventSource>());
         services.AddSingleton<IEventReader>(sp => sp.GetRequiredService<AcceptedEventSource>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registra el sondeo de issues etiquetadas (FR-6): <see cref="GitHubPollingOptions"/> (las rellena Host) y su
+    /// <c>BackgroundService</c>. Solo para <c>serve</c>; necesita <see cref="ILabeledIssueSource"/> (módulo GitHub) e
+    /// <see cref="IInstanceHealth"/> (Host), además de lo que registra <see cref="AddCodeNetixIngestion"/>.
+    /// </summary>
+    public static IServiceCollection AddCodeNetixGitHubPolling(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<GitHubPollingOptions>();
+        services.TryAddSingleton<GitHubPoller>();
+        services.TryAddSingleton<IGitHubPollCycle>(sp => sp.GetRequiredService<GitHubPoller>());
+        services.AddHostedService<GitHubPollingService>();
         return services;
     }
 }

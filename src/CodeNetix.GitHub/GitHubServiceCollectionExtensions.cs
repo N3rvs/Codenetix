@@ -1,5 +1,6 @@
 using CodeNetix.Contracts;
 using CodeNetix.GitHub.Data;
+using CodeNetix.GitHub.Features.ListLabeledIssues;
 using CodeNetix.GitHub.Features.NotifyIssue;
 using CodeNetix.GitHub.Features.PublishPullRequest;
 using Microsoft.EntityFrameworkCore;
@@ -12,8 +13,8 @@ public static class GitHubServiceCollectionExtensions
 {
     /// <summary>
     /// Registra el módulo GitHub: <see cref="IGitHubIdentity"/>, <see cref="IRepositoryPermissions"/>,
-    /// <see cref="IRepositoryWorkspace"/>, <see cref="IIssueReader"/>, <see cref="IIssueNotifier"/> e
-    /// <see cref="IPullRequestPublisher"/> (AD-8: ningún otro módulo llama a la API ni clona), más su
+    /// <see cref="IRepositoryWorkspace"/>, <see cref="IIssueReader"/>, <see cref="IIssueNotifier"/>,
+    /// <see cref="IPullRequestPublisher"/> e <see cref="ILabeledIssueSource"/> (AD-8: ningún otro módulo llama a la API ni clona), más su
     /// <c>DbContext</c> y su <see cref="IModuleDatabase"/> (<c>gh</c>). Necesita <see cref="IDatabaseConnection"/>
     /// (Persistence) e <see cref="ISecretRedactor"/> (Host). Las <see cref="GitHubOptions"/> las enlaza Host
     /// (incluido <see cref="GitHubOptions.WorkspacesDirectory"/>).
@@ -37,6 +38,7 @@ public static class GitHubServiceCollectionExtensions
         services.TryAddSingleton<IIssueReader, IssueReader>();
         services.TryAddSingleton<IIssueNotifier, IssueNotifier>();
         services.TryAddSingleton<IPullRequestPublisher, PullRequestPublisher>();
+        services.TryAddSingleton<ILabeledIssueSource, LabeledIssueSource>();
         return services;
     }
 }

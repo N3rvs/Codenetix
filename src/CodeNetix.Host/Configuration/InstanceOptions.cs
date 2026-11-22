@@ -36,6 +36,76 @@ internal sealed class InstanceOptions
     /// <c>OutputPerMillionUsd</c>, AD-15). Añade o sobreescribe las tarifas del catálogo por defecto.
     /// </summary>
     public Dictionary<string, ModelPricingInstanceOptions> Pricing { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Sondeo de issues etiquetadas (<c>CODENETIX__Polling__*</c>, FR-6). Solo lo usa <c>serve</c>.</summary>
+    public PollingInstanceOptions Polling { get; set; } = new();
+}
+
+internal sealed class PollingInstanceOptions
+{
+    public const string SectionName = InstanceOptions.SectionName + ":Polling";
+
+    public const string RepositoriesKey = SectionName + ":Repositories";
+
+    public const int DefaultIntervalSeconds = 300;
+
+    public const int MinIntervalSeconds = 60;
+
+    public const int MaxIntervalSeconds = 86_400;
+
+    public const int MaxRepositories = 100;
+
+    public const int MaxLabelLength = 50;
+
+    /// <summary>
+    /// <c>CODENETIX__Polling__Repositories</c>: <c>owner/repo</c> separados por comas o <c>;</c>, o como
+    /// <c>__0</c>, <c>__1</c>… (lo lee Host en crudo, no el binder). Vacío (por defecto) = sondeo desactivado.
+    /// </summary>
+    public List<string> Repositories { get; set; } = [];
+
+    /// <summary><c>CODENETIX__Polling__Label</c> (por defecto <c>codenetix</c>).</summary>
+    public string? Label { get; set; }
+
+    /// <summary><c>CODENETIX__Polling__IntervalSeconds</c> (por defecto 300, entre 60 y 86400).</summary>
+    public int IntervalSeconds { get; set; } = DefaultIntervalSeconds;
+
+    public string EffectiveLabel => string.IsNullOrWhiteSpace(Label) ? CodeNetix.Ingestion.Features.PollGitHub.GitHubPollingOptions.DefaultLabel : Label.Trim();
+
+    /// <summary>Lista en crudo: cadena con separadores o hijos indexados; sin vacíos.</summary>
+    public static List<string> ReadRepositories(IConfigurationSection section)
+    {
+        ArgumentNullException.ThrowIfNull(section);
+        if (!string.IsNullOrWhiteSpace(section.Value))
+        {
+            return [.. section.Value.Split([',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+        }
+
+        return [.. section.GetChildren()
+            .OrderBy(c => int.TryParse(c.Key, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var i) ? i : int.MaxValue)
+            .Select(c => c.Value?.Trim())
+            .Where(v => !string.IsNullOrEmpty(v))
+            .Select(v => v!)];
+    }
+
+    /// <summary><c>owner/repo</c> válido (letras, dígitos, <c>-</c>, <c>_</c>, <c>.</c>) → en minúsculas; si no, <c>false</c>.</summary>
+    public static bool TryParseRepository(string? value, out string owner, out string repo)
+    {
+        owner = string.Empty;
+        repo = string.Empty;
+        var parts = value?.Trim().Split('/');
+        if (parts is not { Length: 2 }
+            || !CodeNetix.Contracts.GitHubObjectKey.IsName(parts[0])
+            || !CodeNetix.Contracts.GitHubObjectKey.IsName(parts[1])
+            || parts[0].Length > 39
+            || parts[1].Length > 100)
+        {
+            return false;
+        }
+
+        owner = parts[0].ToLowerInvariant();
+        repo = parts[1].ToLowerInvariant();
+        return true;
+    }
 }
 
 internal sealed class ModelPricingInstanceOptions

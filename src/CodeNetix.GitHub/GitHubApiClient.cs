@@ -12,7 +12,16 @@ namespace CodeNetix.GitHub;
 /// <param name="RateLimited">429, o 403 con <c>x-ratelimit-remaining: 0</c>.</param>
 /// <param name="Link">Cabecera <c>Link</c> de paginación (solo en 2xx), o <c>null</c>.</param>
 /// <param name="ErrorBody">Cuerpo JSON de error en respuestas no 2xx (cuando el servidor devuelve JSON), o <c>null</c>.</param>
-internal sealed record GitHubResponse(HttpStatusCode Status, JsonElement? Body, bool RateLimited, string? Link = null, JsonElement? ErrorBody = null);
+/// <param name="ETag">Cabecera <c>ETag</c> (en 2xx y en <c>304</c>), o <c>null</c>.</param>
+/// <param name="RetryAfter">Con <paramref name="RateLimited"/>: espera que indica GitHub (<c>retry-after</c> o <c>x-ratelimit-reset</c>), o <c>null</c>.</param>
+internal sealed record GitHubResponse(
+    HttpStatusCode Status,
+    JsonElement? Body,
+    bool RateLimited,
+    string? Link = null,
+    JsonElement? ErrorBody = null,
+    string? ETag = null,
+    TimeSpan? RetryAfter = null);
 
 /// <summary>
 /// Cliente HTTP mínimo de la API REST de GitHub. Envía <c>Authorization: Bearer</c>,
@@ -72,7 +81,14 @@ internal sealed class GitHubApiClient : IDisposable
     /// timeout, cuerpo no JSON, redirección a otro host o falta de token.
     /// </summary>
     public Task<GitHubResponse> GetAsync(string relativePath, CancellationToken cancellationToken) =>
-        SendAsync(HttpMethod.Get, relativePath, null, cancellationToken);
+        SendAsync(HttpMethod.Get, relativePath, null, null, cancellationToken);
+
+    /// <summary>
+    /// <c>GET</c> condicional: con <paramref name="ifNoneMatch"/> envía <c>If-None-Match</c> y un <c>304</c> vuelve con
+    /// <see cref="GitHubResponse.Status"/> <c>NotModified</c>, sin cuerpo (GitHub no lo cuenta en el rate limit).
+    /// </summary>
+    public Task<GitHubResponse> GetAsync(string relativePath, string? ifNoneMatch, CancellationToken cancellationToken) =>
+        SendAsync(HttpMethod.Get, relativePath, null, string.IsNullOrWhiteSpace(ifNoneMatch) ? null : ifNoneMatch.Trim(), cancellationToken);
 
     /// <summary>
     /// <c>POST {ApiUrl}/{relativePath}</c> con <paramref name="payload"/> como JSON. Mismas reglas que
@@ -82,10 +98,10 @@ internal sealed class GitHubApiClient : IDisposable
     public Task<GitHubResponse> PostAsync(string relativePath, object payload, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        return SendAsync(HttpMethod.Post, relativePath, JsonSerializer.SerializeToUtf8Bytes(payload), cancellationToken);
+        return SendAsync(HttpMethod.Post, relativePath, JsonSerializer.SerializeToUtf8Bytes(payload), null, cancellationToken);
     }
 
-    private async Task<GitHubResponse> SendAsync(HttpMethod method, string relativePath, byte[]? jsonBody, CancellationToken cancellationToken)
+    private async Task<GitHubResponse> SendAsync(HttpMethod method, string relativePath, byte[]? jsonBody, string? ifNoneMatch, CancellationToken cancellationToken)
     {
         if (IsMergeEndpointPath(relativePath))
         {
@@ -108,7 +124,7 @@ internal sealed class GitHubApiClient : IDisposable
         try
         {
             var uri = new Uri(baseUri, relativePath);
-            var response = await SendOnceAsync(method, uri, jsonBody, token, cancellationToken).ConfigureAwait(false);
+            var response = await SendOnceAsync(method, uri, jsonBody, ifNoneMatch, token, cancellationToken).ConfigureAwait(false);
             try
             {
                 if (IsRedirect(response.StatusCode))
@@ -124,7 +140,7 @@ internal sealed class GitHubApiClient : IDisposable
                     }
 
                     response.Dispose();
-                    response = await SendOnceAsync(method, target, jsonBody, token, cancellationToken).ConfigureAwait(false);
+                    response = await SendOnceAsync(method, target, jsonBody, ifNoneMatch, token, cancellationToken).ConfigureAwait(false);
                 }
 
                 return await ReadAsync(response, cancellationToken).ConfigureAwait(false);
@@ -162,7 +178,7 @@ internal sealed class GitHubApiClient : IDisposable
 
     public void Dispose() => _http.Dispose();
 
-    private async Task<HttpResponseMessage> SendOnceAsync(HttpMethod method, Uri uri, byte[]? jsonBody, string token, CancellationToken cancellationToken)
+    private async Task<HttpResponseMessage> SendOnceAsync(HttpMethod method, Uri uri, byte[]? jsonBody, string? ifNoneMatch, string token, CancellationToken cancellationToken)
     {
         using var request = new HttpRequestMessage(method, uri);
         if (jsonBody is not null)
@@ -174,12 +190,23 @@ internal sealed class GitHubApiClient : IDisposable
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         request.Headers.Add("X-GitHub-Api-Version", ApiVersion);
+        if (ifNoneMatch is not null)
+        {
+            request.Headers.TryAddWithoutValidation("If-None-Match", ifNoneMatch);
+        }
+
         request.Headers.UserAgent.Add(new ProductInfoHeaderValue("CodeNetix", "1.0")); // GitHub rechaza peticiones sin User-Agent.
         return await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<GitHubResponse> ReadAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
+        var etag = response.Headers.ETag?.ToString();
+        if (response.StatusCode == HttpStatusCode.NotModified)
+        {
+            return new GitHubResponse(response.StatusCode, null, false, ETag: etag);
+        }
+
         if (!response.IsSuccessStatusCode)
         {
             JsonElement? errorBody = null;
@@ -194,13 +221,28 @@ internal sealed class GitHubApiClient : IDisposable
                 // Respuesta de error no JSON o vacía: se ignora.
             }
 
-            return new GitHubResponse(response.StatusCode, null, IsRateLimited(response), Link: null, ErrorBody: errorBody);
+            var secondaryByMessage = !IsRateLimited(response) && IsSecondaryRateLimitMessage(response.StatusCode, errorBody);
+            var rateLimited = secondaryByMessage || IsRateLimited(response);
+            TimeSpan? retryAfter = rateLimited ? RetryAfterOf(response) : null;
+            if (secondaryByMessage && (retryAfter is null || retryAfter < SecondaryRateLimitMinimumWait))
+            {
+                // Límite secundario sin cabeceras de espera: GitHub pide esperar al menos un minuto.
+                retryAfter = SecondaryRateLimitMinimumWait;
+            }
+
+            return new GitHubResponse(
+                response.StatusCode,
+                null,
+                rateLimited,
+                Link: null,
+                ErrorBody: errorBody,
+                RetryAfter: retryAfter);
         }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         var link = response.Headers.TryGetValues("Link", out var links) ? string.Join(", ", links) : null;
-        return new GitHubResponse(response.StatusCode, document.RootElement.Clone(), false, link);
+        return new GitHubResponse(response.StatusCode, document.RootElement.Clone(), false, link, ETag: etag);
     }
 
     private static bool IsMergeEndpointPath(string? relativePath)
@@ -229,9 +271,49 @@ internal sealed class GitHubApiClient : IDisposable
         or HttpStatusCode.TemporaryRedirect
         or HttpStatusCode.PermanentRedirect;
 
+    /// <summary>429; 403 con <c>x-ratelimit-remaining: 0</c> (límite primario) o con <c>retry-after</c> (límite secundario).</summary>
     private static bool IsRateLimited(HttpResponseMessage response) =>
         response.StatusCode == HttpStatusCode.TooManyRequests
         || (response.StatusCode == HttpStatusCode.Forbidden
-            && response.Headers.TryGetValues("x-ratelimit-remaining", out var values)
-            && values.Any(v => v.Trim() == "0"));
+            && ((response.Headers.TryGetValues("x-ratelimit-remaining", out var values) && values.Any(v => v.Trim() == "0"))
+                || response.Headers.RetryAfter is not null));
+
+    /// <summary>Espera mínima ante un límite secundario reconocido solo por el mensaje del cuerpo.</summary>
+    public static readonly TimeSpan SecondaryRateLimitMinimumWait = TimeSpan.FromSeconds(60);
+
+    /// <summary>403 cuyo <c>message</c> menciona <c>secondary rate limit</c> (GitHub no siempre manda <c>retry-after</c>).</summary>
+    private static bool IsSecondaryRateLimitMessage(HttpStatusCode status, JsonElement? errorBody) =>
+        status == HttpStatusCode.Forbidden
+        && errorBody is { ValueKind: JsonValueKind.Object } body
+        && body.TryGetProperty("message", out var message)
+        && message.ValueKind == JsonValueKind.String
+        && message.GetString()!.Contains("secondary rate limit", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary><c>retry-after</c> (segundos o fecha) o, si falta, <c>x-ratelimit-reset</c> (segundos Unix); nunca negativo.</summary>
+    private static TimeSpan? RetryAfterOf(HttpResponseMessage response)
+    {
+        var now = DateTimeOffset.UtcNow;
+        if (response.Headers.RetryAfter is { } retryAfter)
+        {
+            if (retryAfter.Delta is { } delta)
+            {
+                return delta < TimeSpan.Zero ? TimeSpan.Zero : delta;
+            }
+
+            if (retryAfter.Date is { } date)
+            {
+                return date > now ? date - now : TimeSpan.Zero;
+            }
+        }
+
+        if (response.Headers.TryGetValues("x-ratelimit-reset", out var resets)
+            && long.TryParse(resets.FirstOrDefault()?.Trim(), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var epoch)
+            && epoch is > 0 and < 253402300799)
+        {
+            var reset = DateTimeOffset.FromUnixTimeSeconds(epoch);
+            return reset > now ? reset - now : TimeSpan.Zero;
+        }
+
+        return null;
+    }
 }
