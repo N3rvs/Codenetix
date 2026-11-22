@@ -1,7 +1,9 @@
+using System.Globalization;
 using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Domain;
 using CodeNetix.Pipeline.Events;
+using CodeNetix.Pipeline.Features.CancelRun;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
@@ -11,11 +13,14 @@ namespace CodeNetix.Pipeline.Features.Budget;
 /// Implementación del libro de presupuesto (<see cref="IBudgetLedger"/>, AD-15):
 /// persiste cada cargo en <c>run_budget</c> y emite <see cref="TokensConsumed"/> en el mismo
 /// <see cref="RunEventLog.SaveAndPublishAsync"/>, con reintento ante colisión de <c>seq</c>.
+/// Cuando el coste acumulado estimable alcanza o supera <c>budget_usd</c>, devuelve
+/// <see cref="BudgetChargeOutcome.Exhausted"/> y dispara el corte cooperativo en <see cref="RunCancellationRegistry"/>.
 /// </summary>
 internal sealed class BudgetLedger(
     IDbContextFactory<PipelineDbContext> contextFactory,
     RunEventLog log,
-    IOptionsMonitor<PricingOptions> pricingOptions) : IBudgetLedger
+    IOptionsMonitor<PricingOptions> pricingOptions,
+    RunCancellationRegistry? cancellationRegistry = null) : IBudgetLedger
 {
     private const int MaxAttempts = 5;
 
@@ -28,7 +33,9 @@ internal sealed class BudgetLedger(
         if (inputTokens == 0 && outputTokens == 0)
         {
             var current = await GetRunCostAsync(request.RunId, cancellationToken).ConfigureAwait(false);
-            return ToChargeResult(chargeUsd: null, current);
+            var emptyResult = ToChargeResult(chargeUsd: null, current);
+            NotifyExhaustedIfNeeded(request.RunId, current, emptyResult);
+            return emptyResult;
         }
 
         var role = string.IsNullOrWhiteSpace(request.Role) ? "unknown" : request.Role.Trim();
@@ -87,7 +94,9 @@ internal sealed class BudgetLedger(
             {
                 await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
                 var summary = await SummarizeForRunAsync(context, request.RunId, budgetLimitUsd, CancellationToken.None).ConfigureAwait(false);
-                return ToChargeResult(chargeUsd, summary);
+                var result = ToChargeResult(chargeUsd, summary);
+                NotifyExhaustedIfNeeded(request.RunId, summary, result);
+                return result;
             }
             catch (DbUpdateException ex) when (attempt < MaxAttempts && RunEventLog.IsUniqueViolation(ex))
             {
@@ -188,16 +197,27 @@ internal sealed class BudgetLedger(
         return Summarize(rows, budgetLimitUsd);
     }
 
+    private void NotifyExhaustedIfNeeded(Guid runId, RunCostSummary summary, BudgetChargeResult result)
+    {
+        if (result.Outcome == BudgetChargeOutcome.Exhausted)
+        {
+            cancellationRegistry?.TryRequestBudgetExhausted(runId, FormatExhaustedDetail(summary));
+        }
+    }
+
+    internal static string FormatExhaustedDetail(RunCostSummary summary) =>
+        summary is { EstimatedCostUsd: { } spent, BudgetLimitUsd: { } limit }
+            ? string.Create(CultureInfo.InvariantCulture, $"presupuesto agotado: ${spent:F4} USD de ${limit:F4} USD")
+            : "presupuesto agotado";
+
     private static BudgetChargeResult ToChargeResult(decimal? chargeUsd, RunCostSummary summary)
     {
-        decimal? remainingUsd = summary is { IsEstimable: true, EstimatedCostUsd: { } total, BudgetLimitUsd: { } limit }
-            ? Math.Max(0m, decimal.Round(limit - total, 8, MidpointRounding.AwayFromZero))
-            : null;
+        var isExhausted = summary.IsExhausted;
+        var outcome = isExhausted ? BudgetChargeOutcome.Exhausted : BudgetChargeOutcome.Recorded;
+        var remainingUsd = isExhausted ? 0m : summary.RemainingUsd;
 
-        // La activación del corte automático (BudgetChargeOutcome.Exhausted / HTTP 402 / BudgetExceeded)
-        // corresponde a la Historia 5.2; en 5.1 siempre se devuelve Recorded.
         return new BudgetChargeResult(
-            Outcome: BudgetChargeOutcome.Recorded,
+            Outcome: outcome,
             ChargeUsd: chargeUsd,
             TotalEstimatedCostUsd: summary.EstimatedCostUsd,
             HasUnpricedModels: summary.HasUnpricedModels,

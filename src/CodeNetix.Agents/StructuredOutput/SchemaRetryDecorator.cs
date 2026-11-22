@@ -1,5 +1,6 @@
 using System.ClientModel;
 using System.Text.Json;
+using CodeNetix.Agents.ChatClients;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 
@@ -27,6 +28,8 @@ internal abstract record StructuredOutcome<T>
     public sealed record Invalid(string LastError, int Attempts) : StructuredOutcome<T>;
 
     public sealed record ProviderFailed(string Detail) : StructuredOutcome<T>;
+
+    public sealed record BudgetExhausted(string Detail) : StructuredOutcome<T>;
 }
 
 /// <summary>
@@ -104,6 +107,11 @@ internal sealed class SchemaRetryDecorator(IOptions<AgentsOptions> options)
                     cancellationToken.ThrowIfCancellationRequested();
                     return new StructuredOutcome<T>.ProviderFailed(DescribeProviderError(ex));
                 }
+            }
+
+            if (client.GetService<BudgetTrackingChatClient>() is { BudgetExhausted: true } budgetClient)
+            {
+                return new StructuredOutcome<T>.BudgetExhausted(budgetClient.BudgetExhaustedDetail ?? "presupuesto agotado");
             }
 
             var validation = validator.Validate(response.Text);

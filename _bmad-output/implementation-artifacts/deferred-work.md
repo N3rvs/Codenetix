@@ -53,3 +53,4 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-2-3-el-programador-implementa-la-spec.md`
   summary: `ClaudeCodeAgent.BuildCommand` todavía no pasa `--max-budget-usd <restante>` al CLI de Claude Code (AD-5, AD-15).
   evidence: El presupuesto restante depende de `IBudgetLedger`, que se implementa en la Épica 5 (historia 5.2). Añadir la bandera en cuanto exista el libro de presupuesto. Severidad medium.
+  resolved: Historia 5.2 — `ClaudeCodeAgent` consulta `IBudgetLedger.GetRunCostAsync`, calcula el presupuesto restante respecto a `EffectiveConfig.BudgetUsd` y pasa `--max-budget-usd <restante>` (`CultureInfo.InvariantCulture`) en `BuildCommand` (devolviendo `CodingResult.BudgetExhausted` si el restante es `<= 0`).

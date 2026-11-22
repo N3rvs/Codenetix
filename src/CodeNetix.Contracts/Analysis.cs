@@ -109,8 +109,8 @@ public static class NotAutomatableCategories
 }
 
 /// <summary>
-/// Resultado del Analista: <see cref="Ok"/>, <see cref="NotAutomatable"/>, <see cref="SchemaInvalid"/> o
-/// <see cref="ProviderError"/>.
+/// Resultado del Analista: <see cref="Ok"/>, <see cref="NotAutomatable"/>, <see cref="SchemaInvalid"/>,
+/// <see cref="ProviderError"/> o <see cref="BudgetExhausted"/>.
 /// </summary>
 public abstract record AnalysisResult
 {
@@ -133,6 +133,9 @@ public abstract record AnalysisResult
 
     /// <summary>Error HTTP, de red o timeout del Proveedor (no cuenta como reintento de esquema).</summary>
     public sealed record ProviderError(string Detail) : AnalysisResult;
+
+    /// <summary>La Ejecución agotó su presupuesto antes o durante el análisis (FR-13, AD-15).</summary>
+    public sealed record BudgetExhausted(string Detail) : AnalysisResult;
 }
 
 /// <summary>

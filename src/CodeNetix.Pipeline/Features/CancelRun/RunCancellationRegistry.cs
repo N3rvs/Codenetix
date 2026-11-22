@@ -70,7 +70,7 @@ internal sealed class RunCancellationRegistry
         CancellationTokenSource ctsToCancel;
         lock (slot.Sync)
         {
-            if (slot.Disposed)
+            if (slot.Disposed || slot.BudgetExhausted)
             {
                 inDeciding = false;
                 return false;
@@ -105,9 +105,55 @@ internal sealed class RunCancellationRegistry
     }
 
     /// <summary>
+    /// Solicita el corte cooperativo de una Ejecución activa en memoria al agotarse su presupuesto (FR-13, AD-15).
+    /// Devuelve <c>true</c> si se marcó el corte y se señalizó la cancelación; <c>false</c> si la Ejecución no está
+    /// activa o ya entró en <c>Deciding</c>.
+    /// </summary>
+    public bool TryRequestBudgetExhausted(Guid runId, string detail)
+    {
+        if (!_slots.TryGetValue(runId, out var slot))
+        {
+            return false;
+        }
+
+        CancellationTokenSource ctsToCancel;
+        lock (slot.Sync)
+        {
+            if (slot.Disposed || slot.InDeciding)
+            {
+                return false;
+            }
+
+            slot.BudgetExhausted = true;
+            if (string.IsNullOrWhiteSpace(slot.BudgetExhaustedDetail))
+            {
+                slot.BudgetExhaustedDetail = detail;
+            }
+
+            ctsToCancel = slot.UserCts;
+        }
+
+        try
+        {
+            ctsToCancel.Cancel(throwOnFirstException: false);
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (AggregateException)
+        {
+            // Algún callback registrado en el token lanzó una excepción; la cancelación ya fue señalizada.
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Barrera atómica antes de <c>Reviewing → Deciding</c>. Devuelve <c>false</c> si ya existe una petición
-    /// de cancelación pendiente (el orquestador debe abortar sin entrar en <c>Deciding</c>); si devuelve <c>true</c>,
-    /// la Ejecución queda marcada en <c>Deciding</c> y cualquier cancelación posterior recibirá conflicto.
+    /// de cancelación o corte por presupuesto pendiente (el orquestador debe abortar sin entrar en <c>Deciding</c>);
+    /// si devuelve <c>true</c>, la Ejecución queda marcada en <c>Deciding</c> y cualquier cancelación posterior
+    /// recibirá conflicto.
     /// </summary>
     public bool TryEnterDeciding(Guid runId)
     {
@@ -118,7 +164,7 @@ internal sealed class RunCancellationRegistry
 
         lock (slot.Sync)
         {
-            if (slot.CancelRequested)
+            if (slot.CancelRequested || slot.BudgetExhausted)
             {
                 return false;
             }
@@ -139,6 +185,22 @@ internal sealed class RunCancellationRegistry
         lock (slot.Sync)
         {
             return slot.CancelRequested;
+        }
+    }
+
+    /// <summary>Indica si la Ejecución activa recibió una solicitud de corte por presupuesto agotado.</summary>
+    public bool IsBudgetExhausted(Guid runId, out string? detail)
+    {
+        if (!_slots.TryGetValue(runId, out var slot))
+        {
+            detail = null;
+            return false;
+        }
+
+        lock (slot.Sync)
+        {
+            detail = slot.BudgetExhaustedDetail;
+            return slot.BudgetExhausted;
         }
     }
 
@@ -203,6 +265,10 @@ internal sealed class RunCancellationRegistry
 
         public bool CancelRequested { get; set; }
 
+        public bool BudgetExhausted { get; set; }
+
+        public string? BudgetExhaustedDetail { get; set; }
+
         public bool InDeciding { get; set; }
 
         public bool Disposed { get; set; }
@@ -230,6 +296,32 @@ internal sealed class RunCancellationRegistry
                 lock (slot.Sync)
                 {
                     return slot.CancelRequested;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Indica si esta Ejecución agotó su presupuesto, incluso tras llamar a <see cref="CompleteCancellablePhase"/>.
+        /// </summary>
+        public bool IsBudgetExhausted
+        {
+            get
+            {
+                lock (slot.Sync)
+                {
+                    return slot.BudgetExhausted;
+                }
+            }
+        }
+
+        /// <summary>Detalle del agotamiento de presupuesto si <see cref="IsBudgetExhausted"/> es <c>true</c>.</summary>
+        public string? BudgetExhaustedDetail
+        {
+            get
+            {
+                lock (slot.Sync)
+                {
+                    return slot.BudgetExhaustedDetail;
                 }
             }
         }

@@ -104,7 +104,8 @@ public sealed record ReviewResult(
     Verdict Verdict,
     int Attempts,
     string Model,
-    bool FallbackDueToError = false);
+    bool FallbackDueToError = false,
+    bool BudgetExhausted = false);
 
 /// <summary>
 /// Revisor independiente (FR-14, FR-15, AD-5): audita el diff frente a la Spec y el TestReport sin ejecutar código

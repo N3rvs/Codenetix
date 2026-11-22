@@ -13,7 +13,7 @@ public sealed record CodingInput(
     ISandboxSession Sandbox,
     string? Feedback = null);
 
-/// <summary>Resultado de un intento del Programador: <see cref="Completed"/> o <see cref="Failed"/>.</summary>
+/// <summary>Resultado de un intento del Programador: <see cref="Completed"/>, <see cref="Failed"/> o <see cref="BudgetExhausted"/>.</summary>
 public abstract record CodingResult
 {
     private CodingResult()
@@ -25,6 +25,9 @@ public abstract record CodingResult
 
     /// <summary>Error, timeout o sin cambios: el intento cuenta como fallido. <paramref name="Reason"/> va en español.</summary>
     public sealed record Failed(string Reason) : CodingResult;
+
+    /// <summary>La Ejecución agotó su presupuesto antes o durante el intento de programación (FR-13, AD-15).</summary>
+    public sealed record BudgetExhausted(string Detail) : CodingResult;
 }
 
 /// <summary>
