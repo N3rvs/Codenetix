@@ -3,7 +3,7 @@
 #   docker build -f docker/codenetix.Dockerfile -t codenetix .
 
 # --- Panel (React + Vite) -> src/CodeNetix.Host/wwwroot ---------------------
-FROM node:24 AS panel
+FROM --platform=$BUILDPLATFORM node:24 AS panel
 WORKDIR /src/panel
 COPY panel/package.json panel/package-lock.json ./
 RUN npm ci
@@ -11,7 +11,7 @@ COPY panel/ ./
 RUN npm run build
 
 # --- .NET: restore, ArchitectureTests, publish --------------------------------
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY global.json CodeNetix.slnx Directory.Build.props Directory.Packages.props ./
 COPY src/CodeNetix.Contracts/CodeNetix.Contracts.csproj src/CodeNetix.Contracts/
@@ -34,6 +34,9 @@ COPY panel/openapi/v1.json panel/openapi/v1.json
 # Artefactos de la acción composite (Historia 6.2): CompositeActionTests los valida.
 COPY action.yml README.md ./
 COPY examples/workflows/codenetix.yml examples/workflows/codenetix.yml
+# Workflow de CI (Historia 6.3): CiWorkflowTests valida su contrato y este Dockerfile.
+COPY .github/workflows/ci.yml .github/workflows/ci.yml
+COPY docker/codenetix.Dockerfile docker/codenetix.Dockerfile
 COPY src/ src/
 COPY tests/CodeNetix.ArchitectureTests/ tests/CodeNetix.ArchitectureTests/
 COPY tests/CodeNetix.Host.Tests/ tests/CodeNetix.Host.Tests/
@@ -45,9 +48,11 @@ RUN git --version \
  && dotnet test --project tests/CodeNetix.ArchitectureTests/CodeNetix.ArchitectureTests.csproj -c Release --no-restore \
  && dotnet test --project tests/CodeNetix.Host.Tests/CodeNetix.Host.Tests.csproj -c Release --no-restore
 
+ARG TARGETARCH
 COPY --from=panel /src/src/CodeNetix.Host/wwwroot/ src/CodeNetix.Host/wwwroot/
 RUN test -f src/CodeNetix.Host/wwwroot/index.html \
- && dotnet publish src/CodeNetix.Host/CodeNetix.Host.csproj -c Release --no-restore -o /app
+ && DOTNET_ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "x64") \
+ && dotnet publish src/CodeNetix.Host/CodeNetix.Host.csproj -c Release -a "$DOTNET_ARCH" --no-self-contained -o /app
 
 # --- Runtime -------------------------------------------------------------------
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
