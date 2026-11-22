@@ -108,6 +108,26 @@ public sealed partial class ActionModeTests : IDisposable
         Assert.Equal(["http://+:8080"], ActionMode.ListenUrls(configuration));
     }
 
+    // --- Historia 7.1: el sondeo es solo de serve ---
+
+    [Fact]
+    public async Task Action_mode_never_registers_the_GitHub_poller_even_with_polling_repositories()
+    {
+        await using var gitHub = await FakeGitHub.StartAsync(Ct);
+        var harness = new Harness(gitHub);
+        var env = Environment(gitHub);
+        env["CODENETIX:Polling:Repositories"] = "o/r";
+        var registered = true;
+
+        var exitCode = await RunAsync(env, harness, configureBuilder: builder =>
+            registered = builder.Services.Any(d => d.ImplementationType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPollingService)
+                || d.ServiceType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPoller)));
+
+        Assert.True(exitCode == CodeNetixCommandLine.ExitOk, Stdout + Stderr);
+        Assert.False(registered);
+        Assert.Equal(0, gitHub.AllIssueListCalls);
+    }
+
     // --- Fila 2: Ejecución fallida → Resultado Failed, exit 1, directorio temporal borrado ---
 
     [Fact]

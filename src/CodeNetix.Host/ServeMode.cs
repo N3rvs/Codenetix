@@ -41,6 +41,9 @@ internal static class ServeMode
 
         builder.AddCodeNetixServices();
 
+        // Sondeo de issues etiquetadas (FR-6): solo en serve; sin repositorios no hace nada.
+        builder.AddGitHubPolling();
+
         builder.Services.AddSingleton<IRunEventPublisher, RunsHubEventPublisher>();
         builder.Services.AddSignalR();
         builder.Services.AddOpenApi(options =>

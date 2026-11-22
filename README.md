@@ -155,6 +155,28 @@ Variables (todas opcionales):
 | `CODENETIX__Agents__Coder__Provider` | Único Proveedor configurado o `Anthropic` |
 | `CODENETIX__Agents__Coder__Model` | `claude-sonnet-5-5` |
 
+## Sondeo de issues etiquetadas
+
+Sin servidor público ni webhooks, `codenetix serve` puede recoger solo las issues abiertas con la etiqueta `codenetix`
+de los repositorios que le indiques. Está **desactivado por defecto**: se activa al definir los repositorios.
+
+| Variable | Por defecto |
+| --- | --- |
+| `CODENETIX__Polling__Repositories` | Vacío (sondeo desactivado). Lista `owner/repo` separada por comas, p. ej. `acme/api,acme/web` (o `__0`, `__1`…) |
+| `CODENETIX__Polling__Label` | `codenetix` |
+| `CODENETIX__Polling__IntervalSeconds` | `300` (5 minutos; entre `60` y `86400`) |
+
+- Cada ciclo busca, en cada issue abierta con la etiqueta, quién la etiquetó por última vez. Solo se procesa si esa
+  persona tiene permiso de escritura en el repositorio; si no, el Evento queda «ignorado: no autorizado».
+- Cada etiquetado se procesa una sola vez: para relanzar una issue, quita la etiqueta y vuelve a ponerla. Si ya la
+  lanzaste con `codenetix fix` después de etiquetarla, el sondeo no la repite.
+- Al activarlo se recogen también las issues que ya llevaban la etiqueta.
+- Si renombras o transfieres un repositorio y actualizas `CODENETIX__Polling__Repositories` con el nombre nuevo, las
+  issues abiertas que ya llevaban la etiqueta se vuelven a lanzar: la deduplicación va por `owner/repo` y el nombre
+  nuevo es, para CodeNetix, otro repositorio. Quita antes la etiqueta de las que no quieras relanzar.
+- Usa peticiones condicionales (`ETag`) para gastar poco rate limit del token y, si GitHub lo agota, espera a que se
+  renueve. En modo diagnóstico, y en `codenetix action`, no sondea.
+
 ## Modo GitHub Action (`codenetix action`)
 
 Dentro de un job de GitHub Actions (runner `ubuntu-*` con Docker), `codenetix action` procesa una issue al etiquetarla

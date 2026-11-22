@@ -39,6 +39,18 @@ internal static class InstanceOptionsValidator
     public const string InvalidSandboxMaxLifetimeMinutes =
         "CODENETIX__Sandbox__MaxLifetimeMinutes debe ser un entero entre 1 y 1440 (por defecto 60).";
 
+    public const string InvalidPollingRepository =
+        "CODENETIX__Polling__Repositories debe ser una lista de repositorios owner/repo separados por comas (o CODENETIX__Polling__Repositories__0, __1…); hay al menos un elemento que no lo es.";
+
+    public const string TooManyPollingRepositories =
+        "CODENETIX__Polling__Repositories admite como mucho 100 repositorios.";
+
+    public const string InvalidPollingLabel =
+        "CODENETIX__Polling__Label debe ser un nombre de etiqueta de 1 a 50 caracteres, sin comas ni caracteres de control (por defecto codenetix).";
+
+    public const string InvalidPollingInterval =
+        "CODENETIX__Polling__IntervalSeconds debe ser un entero entre 60 y 86400 (por defecto 300).";
+
     public static IReadOnlyList<string> Validate(InstanceOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -152,7 +164,37 @@ internal static class InstanceOptionsValidator
             }
         }
 
+        ValidatePolling(options.Polling ?? new PollingInstanceOptions(), reasons);
+
         return reasons;
+    }
+
+    private static void ValidatePolling(PollingInstanceOptions polling, List<string> reasons)
+    {
+        var repositories = polling.Repositories ?? [];
+        if (repositories.Any(r => !PollingInstanceOptions.TryParseRepository(r, out _, out _)))
+        {
+            reasons.Add(InvalidPollingRepository);
+        }
+
+        if (repositories.Select(r => r.Trim().ToLowerInvariant()).Distinct(StringComparer.Ordinal).Count() > PollingInstanceOptions.MaxRepositories)
+        {
+            reasons.Add(TooManyPollingRepositories);
+        }
+
+        if (polling.Label is { } label && !string.IsNullOrWhiteSpace(label))
+        {
+            var trimmed = label.Trim();
+            if (trimmed.Length > PollingInstanceOptions.MaxLabelLength || trimmed.Contains(',') || trimmed.Any(char.IsControl))
+            {
+                reasons.Add(InvalidPollingLabel);
+            }
+        }
+
+        if (polling.IntervalSeconds is < PollingInstanceOptions.MinIntervalSeconds or > PollingInstanceOptions.MaxIntervalSeconds)
+        {
+            reasons.Add(InvalidPollingInterval);
+        }
     }
 
     private static void AddDistinct(List<string> target, IReadOnlyList<string> items)

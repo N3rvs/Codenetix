@@ -51,15 +51,86 @@ internal sealed class FakeGitHub : IAsyncDisposable
                     return Results.StatusCode(StatusCodes.Status301MovedPermanently);
                 }
 
-                if (PermissionStatus != StatusCodes.Status200OK)
+                var permissionStatus = PermissionStatusByLogin.TryGetValue(login, out var byLogin) ? byLogin : PermissionStatus;
+                if (permissionStatus != StatusCodes.Status200OK)
                 {
                     AddRateLimitHeader(context);
-                    return Results.Json(new { message = "Not Found" }, statusCode: PermissionStatus);
+                    return Results.Json(new { message = "Not Found" }, statusCode: permissionStatus);
                 }
 
+                var permission = PermissionsByLogin.TryGetValue(login, out var specific) ? specific : Permission;
                 return OmitPermission
-                    ? Results.Json(new { role_name = Permission, user = new { login } })
-                    : Results.Json(new { permission = Permission, role_name = Permission, user = new { login } });
+                    ? Results.Json(new { role_name = permission, user = new { login } })
+                    : Results.Json(new { permission, role_name = permission, user = new { login } });
+            });
+
+            // Sondeo (7.1): issues abiertas con una etiqueta, con ETag y paginación como GitHub.
+            _app.MapGet(prefix + "/repos/{owner}/{repo}/issues", (HttpContext context, string owner, string repo) =>
+            {
+                var page = Math.Max(1, int.TryParse(context.Request.Query["page"], out var p) ? p : 1);
+                Record(context, $"issues-list:{owner}/{repo}:page={page}:labels={context.Request.Query["labels"]}");
+                if (IssueListStatuses.TryGetValue($"{owner}/{repo}", out var status) && status != StatusCodes.Status200OK)
+                {
+                    AddRateLimitHeader(context);
+                    return Results.Json(new { message = IssueListErrorMessage }, statusCode: status);
+                }
+
+                var label = context.Request.Query["labels"].ToString();
+                var size = Math.Clamp(int.TryParse(context.Request.Query["per_page"], out var perPage) ? perPage : 30, 1, 100);
+                var all = ListedIssuesOf(owner, repo);
+                FakeListedIssue[] matching;
+                lock (all)
+                {
+                    matching = [.. all
+                        .Where(i => string.Equals(i.Label, label, StringComparison.OrdinalIgnoreCase))
+                        .OrderByDescending(i => i.UpdatedAt, StringComparer.Ordinal)];
+                }
+
+                var slice = matching.Skip((page - 1) * size).Take(size)
+                    .Select(i => i.PullRequest
+                        ? (object)new { number = i.Number, updated_at = i.UpdatedAt, state = "open", pull_request = new { url = "x" } }
+                        : new { number = i.Number, updated_at = i.UpdatedAt, state = "open" })
+                    .ToArray();
+                var json = System.Text.Json.JsonSerializer.Serialize(slice);
+                var etag = "\"" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json)))[..16] + "\"";
+                context.Response.Headers.ETag = etag;
+                AddPageLinks(context, page, Math.Max(1, (matching.Length + size - 1) / size));
+                if (string.Equals(context.Request.Headers.IfNoneMatch.ToString(), etag, StringComparison.Ordinal))
+                {
+                    return Results.StatusCode(StatusCodes.Status304NotModified);
+                }
+
+                return Results.Text(json, "application/json");
+            });
+
+            _app.MapGet(prefix + "/repos/{owner}/{repo}/issues/{number}/events", (HttpContext context, string owner, string repo, string number) =>
+            {
+                var page = Math.Max(1, int.TryParse(context.Request.Query["page"], out var p) ? p : 1);
+                Record(context, $"issue-events:{owner}/{repo}#{number}:page={page}");
+                var eventsStatus = IssueEventsStatuses.TryGetValue($"{owner}/{repo}#{number}", out var byIssue) ? byIssue : IssueEventsStatus;
+                if (eventsStatus != StatusCodes.Status200OK)
+                {
+                    AddRateLimitHeader(context);
+                    return Results.Json(new { message = "Server Error" }, statusCode: eventsStatus);
+                }
+
+                var size = Math.Clamp(int.TryParse(context.Request.Query["per_page"], out var perPage) ? perPage : 30, 1, 100);
+                var list = IssueEventsOf(owner, repo, number);
+                FakeIssueEvent[] all;
+                lock (list)
+                {
+                    all = [.. list];
+                }
+
+                AddPageLinks(context, page, Math.Max(1, (all.Length + size - 1) / size));
+                return Results.Json(all.Skip((page - 1) * size).Take(size).Select(e => new
+                {
+                    id = e.Id,
+                    @event = e.Event,
+                    actor = e.Actor is null ? null : new { login = e.Actor },
+                    label = e.Label is null ? null : new { name = e.Label, color = "ededed" },
+                    created_at = e.CreatedAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", System.Globalization.CultureInfo.InvariantCulture),
+                }));
             });
             _app.MapGet(prefix + "/repos/{owner}/{repo}/issues/{number}", async (HttpContext context, string owner, string repo, string number) =>
             {
@@ -320,6 +391,109 @@ internal sealed class FakeGitHub : IAsyncDisposable
 
     internal sealed record FakePullRequest(long Number, string HtmlUrl, string Title, string Head, string Base, string Body);
 
+    // --- Sondeo (7.1) -------------------------------------------------------------
+
+    private readonly ConcurrentDictionary<string, List<FakeListedIssue>> _listedIssues = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, List<FakeIssueEvent>> _issueEvents = new(StringComparer.Ordinal);
+
+    /// <summary><c>owner/repo</c> → respuesta de <c>GET /repos/{o}/{r}/issues</c> (por defecto 200).</summary>
+    public ConcurrentDictionary<string, int> IssueListStatuses { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Respuesta de <c>GET …/issues/{n}/events</c> (por defecto 200).</summary>
+    public int IssueEventsStatus { get; set; } = StatusCodes.Status200OK;
+
+    /// <summary><c>owner/repo#n</c> → respuesta de <c>GET …/issues/{n}/events</c> para esa issue.</summary>
+    public ConcurrentDictionary<string, int> IssueEventsStatuses { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Login → respuesta de la consulta de permiso (p. ej. 404 para <c>ghost</c>).</summary>
+    public ConcurrentDictionary<string, int> PermissionStatusByLogin { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary><c>message</c> del cuerpo de error del listado de issues.</summary>
+    public string IssueListErrorMessage { get; set; } = "Server Error";
+
+    /// <summary>Valor de <c>retry-after</c> en las respuestas de error (segundos o fecha HTTP), si se define.</summary>
+    public string? RetryAfterHeader { get; set; }
+
+    /// <summary>Login → permiso (sustituye a <see cref="Permission"/> para ese login).</summary>
+    public ConcurrentDictionary<string, string> PermissionsByLogin { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Segundos Unix de <c>x-ratelimit-reset</c> en las respuestas con <see cref="RateLimitExhausted"/>.</summary>
+    public long? RateLimitReset { get; set; }
+
+    /// <summary>Pone (o sustituye) una issue abierta en el listado de <c>owner/repo</c>.</summary>
+    public void SetListedIssue(string owner, string repo, long number, string updatedAt, string label = "codenetix", bool pullRequest = false)
+    {
+        var list = ListedIssuesOf(owner, repo);
+        lock (list)
+        {
+            list.RemoveAll(i => i.Number == number);
+            list.Add(new FakeListedIssue(number, updatedAt, label, pullRequest));
+        }
+    }
+
+    public void RemoveListedIssue(string owner, string repo, long number)
+    {
+        var list = ListedIssuesOf(owner, repo);
+        lock (list)
+        {
+            list.RemoveAll(i => i.Number == number);
+        }
+    }
+
+    /// <summary>Añade un evento al final (orden cronológico) de los eventos de la issue.</summary>
+    public void AddIssueEvent(string owner, string repo, long number, long id, string kind, string? label, string? actor, DateTimeOffset? createdAt = null, bool omitCreatedAt = false)
+    {
+        var list = IssueEventsOf(owner, repo, number.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        lock (list)
+        {
+            list.Add(new FakeIssueEvent(id, kind, label, actor, omitCreatedAt ? null : createdAt ?? DateTimeOffset.UtcNow));
+        }
+    }
+
+    /// <summary>Peticiones de listado de issues de <c>owner/repo</c>.</summary>
+    public IReadOnlyList<Request> IssueListRequests(string owner, string repo) =>
+        [.. _requests.Where(r => r.Kind.StartsWith($"issues-list:{owner}/{repo}:", StringComparison.Ordinal))];
+
+    /// <summary>Peticiones de eventos de la issue <c>owner/repo#number</c>.</summary>
+    public int IssueEventCalls(string owner, string repo, long number) =>
+        _requests.Count(r => r.Kind.StartsWith($"issue-events:{owner}/{repo}#{number}:", StringComparison.Ordinal));
+
+    public int AllIssueListCalls => _requests.Count(r => r.Kind.StartsWith("issues-list:", StringComparison.Ordinal));
+
+    private List<FakeListedIssue> ListedIssuesOf(string owner, string repo) => _listedIssues.GetOrAdd($"{owner}/{repo}", _ => []);
+
+    private List<FakeIssueEvent> IssueEventsOf(string owner, string repo, string number) => _issueEvents.GetOrAdd($"{owner}/{repo}#{number}", _ => []);
+
+    /// <summary>Como GitHub: <c>Link</c> solo si hay más de una página.</summary>
+    private void AddPageLinks(HttpContext context, int index, int last)
+    {
+        if (last <= 1)
+        {
+            return;
+        }
+
+        var query = string.Join("&", context.Request.Query.Where(q => q.Key != "page").Select(q => $"{q.Key}={Uri.EscapeDataString(q.Value.ToString())}"));
+        var url = $"{BaseUrl}{context.Request.Path}?{query}&page=";
+        var parts = new List<string>();
+        if (index < last)
+        {
+            parts.Add($"<{url}{index + 1}>; rel=\"next\"");
+            parts.Add($"<{url}{last}>; rel=\"last\"");
+        }
+
+        if (index > 1)
+        {
+            parts.Add($"<{url}{index - 1}>; rel=\"prev\"");
+            parts.Add($"<{url}1>; rel=\"first\"");
+        }
+
+        context.Response.Headers["Link"] = string.Join(", ", parts);
+    }
+
+    internal sealed record FakeListedIssue(long Number, string UpdatedAt, string Label, bool PullRequest);
+
+    internal sealed record FakeIssueEvent(long Id, string Event, string? Label, string? Actor, DateTimeOffset? CreatedAt);
+
     public string Login { get; set; } = DefaultLogin;
 
     public int UserStatus { get; set; } = StatusCodes.Status200OK;
@@ -339,9 +513,18 @@ internal sealed class FakeGitHub : IAsyncDisposable
 
     private void AddRateLimitHeader(HttpContext context)
     {
+        if (RetryAfterHeader is { } retryAfter)
+        {
+            context.Response.Headers.RetryAfter = retryAfter;
+        }
+
         if (RateLimitExhausted)
         {
             context.Response.Headers["x-ratelimit-remaining"] = "0";
+            if (RateLimitReset is { } reset)
+            {
+                context.Response.Headers["x-ratelimit-reset"] = reset.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
         }
     }
 
@@ -371,7 +554,8 @@ internal sealed class FakeGitHub : IAsyncDisposable
         context.Request.Headers.Authorization.ToString(),
         context.Request.Headers.Accept.ToString(),
         context.Request.Headers["X-GitHub-Api-Version"].ToString(),
-        context.Request.Headers.UserAgent.ToString()));
+        context.Request.Headers.UserAgent.ToString(),
+        context.Request.Headers.IfNoneMatch.ToString()));
 
     private async Task DelayAsync(HttpContext context)
     {
@@ -394,5 +578,5 @@ internal sealed class FakeGitHub : IAsyncDisposable
         await _app.DisposeAsync();
     }
 
-    internal sealed record Request(string Kind, string Path, string Authorization, string Accept, string ApiVersion, string UserAgent);
+    internal sealed record Request(string Kind, string Path, string Authorization, string Accept, string ApiVersion, string UserAgent, string IfNoneMatch = "");
 }
