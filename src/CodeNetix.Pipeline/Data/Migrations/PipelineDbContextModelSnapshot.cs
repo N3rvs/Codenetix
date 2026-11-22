@@ -157,6 +157,64 @@ namespace CodeNetix.Pipeline.Data.Migrations
                     b.ToTable("run_runs", (string)null);
                 });
 
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunBudgetRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("id");
+
+                    b.Property<decimal?>("CostUsd")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("cost_usd");
+
+                    b.Property<long>("CreatedAt")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("InputTokens")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("input_tokens");
+
+                    b.Property<bool>("IsPriced")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("is_priced");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("model");
+
+                    b.Property<int>("OutputTokens")
+                        .HasColumnType("INTEGER")
+                        .HasColumnName("output_tokens");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("provider");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .HasColumnType("TEXT")
+                        .HasColumnName("role");
+
+                    b.Property<Guid>("RunId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("run_id");
+
+                    b.Property<Guid?>("StageId")
+                        .HasColumnType("TEXT")
+                        .HasColumnName("stage_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_run_budget");
+
+                    b.HasIndex("RunId")
+                        .HasDatabaseName("ix_run_budget_run_id");
+
+                    b.ToTable("run_budget", (string)null);
+                });
+
             modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunStageRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -315,6 +373,16 @@ namespace CodeNetix.Pipeline.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_run_specs_run_runs");
+                });
+
+            modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunBudgetRecord", b =>
+                {
+                    b.HasOne("CodeNetix.Pipeline.Domain.PipelineRun", null)
+                        .WithMany()
+                        .HasForeignKey("RunId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_run_budget_run_runs");
                 });
 
             modelBuilder.Entity("CodeNetix.Pipeline.Domain.RunStageRecord", b =>

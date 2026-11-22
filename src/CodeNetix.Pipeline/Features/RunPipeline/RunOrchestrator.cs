@@ -66,6 +66,7 @@ internal sealed partial class RunOrchestrator(
     IIssueNotifier notifier,
     IPullRequestPublisher pullRequestPublisher,
     IRunEventSink events,
+    IBudgetLedger budgetLedger,
     ISandboxManager sandboxes,
     RunCancellationRegistry cancellationRegistry,
     IOptions<InstanceLimits> limits,
@@ -1121,6 +1122,7 @@ internal sealed partial class RunOrchestrator(
                 r.CreatedAt))
             .ToArray();
 
+        var runCost = await budgetLedger.GetRunCostAsync(run.Id, stoppingToken).ConfigureAwait(false);
         var title = PullRequestBodyBuilder.BuildTitle(issueNumber, spec.Problem, log.Redactor, policyResult);
         var commitMessage = PullRequestBodyBuilder.BuildCommitMessage(run.Id, issueNumber, spec.Problem, log.Redactor);
         var body = PullRequestBodyBuilder.BuildBody(
@@ -1133,8 +1135,8 @@ internal sealed partial class RunOrchestrator(
             verdicts,
             testReport,
             log.Redactor,
-            costUsd: null,
-            policy: policyResult);
+            policy: policyResult,
+            cost: runCost);
 
         var request = new PullRequestRequest(run.Id, owner, repo, run.BaseSha, title, body, commitMessage);
 

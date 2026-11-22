@@ -53,7 +53,8 @@ internal static class GetRunEndpoint
             testReport,
             verdicts,
             pullRequest,
-            events));
+            events,
+            run.Cost));
     }
 
     internal static IResult RunNotFound(HttpContext context) => Results.Problem(
@@ -77,4 +78,5 @@ internal sealed record RunResponse(
     TestReport? TestReport,
     IReadOnlyList<RunVerdict> Verdicts,
     PullRequestInfo? PullRequest,
-    IReadOnlyList<RunEvent> Events);
+    IReadOnlyList<RunEvent> Events,
+    RunCostSummary? Cost = null);

@@ -569,6 +569,59 @@
           "NeedsAttention"
         ]
       },
+      "RunCostSummary": {
+        "required": [
+          "estimatedCostUsd",
+          "isEstimable",
+          "hasUnpricedModels",
+          "totalInputTokens",
+          "totalOutputTokens",
+          "budgetLimitUsd"
+        ],
+        "type": "object",
+        "properties": {
+          "estimatedCostUsd": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          },
+          "isEstimable": {
+            "type": "boolean"
+          },
+          "hasUnpricedModels": {
+            "type": "boolean"
+          },
+          "totalInputTokens": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "totalOutputTokens": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "budgetLimitUsd": {
+            "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d+)?$",
+            "type": [
+              "null",
+              "number",
+              "string"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "RunEvent": {
         "required": [
           "type"
@@ -1735,6 +1788,16 @@
             "items": {
               "$ref": "#/components/schemas/RunEvent"
             }
+          },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunCostSummary"
+              }
+            ]
           }
         }
       },
@@ -1804,6 +1867,16 @@
           "updatedAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "cost": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunCostSummary"
+              }
+            ]
           }
         }
       },

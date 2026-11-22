@@ -19,11 +19,13 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
     public const string TestReportsTable = Prefix + "_test_reports";
     public const string StagesTable = Prefix + "_stages";
     public const string VerdictsTable = Prefix + "_verdicts";
+    public const string BudgetTable = Prefix + "_budget";
     public const string ActiveObjectKeyIndex = "ux_" + RunsTable + "_active_object_key";
     public const string ShortIdIndex = "ux_" + RunsTable + "_short_id";
     public const string EventIdIndex = "ux_" + RunsTable + "_event_id";
     public const string StagesRunIndex = "ix_" + StagesTable + "_run_kind_round";
     public const string VerdictsRunRoundReviewerIndex = "ux_" + VerdictsTable + "_run_round_reviewer";
+    public const string BudgetRunIndex = "ix_" + BudgetTable + "_run_id";
 
     /// <summary>
     /// Filtro del índice UNIQUE parcial: como mucho una Ejecución no terminal por objeto (AD-4).
@@ -42,6 +44,8 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
     public DbSet<RunStageRecord> Stages => Set<RunStageRecord>();
 
     public DbSet<RunVerdictRecord> Verdicts => Set<RunVerdictRecord>();
+
+    public DbSet<RunBudgetRecord> BudgetCharges => Set<RunBudgetRecord>();
 
     /// <summary>Configura SQLite con el historial de migraciones del módulo.</summary>
     public static void Configure(DbContextOptionsBuilder builder, string connectionString)
@@ -164,6 +168,27 @@ internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> opti
             .WithMany()
             .HasForeignKey(v => v.StageId)
             .HasConstraintName("fk_" + VerdictsTable + "_" + StagesTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var budget = modelBuilder.Entity<RunBudgetRecord>();
+        budget.ToTable(BudgetTable);
+        budget.HasKey(b => b.Id).HasName("pk_" + BudgetTable);
+        budget.Property(b => b.Id).HasColumnName("id").ValueGeneratedNever();
+        budget.Property(b => b.RunId).HasColumnName("run_id");
+        budget.Property(b => b.StageId).HasColumnName("stage_id");
+        budget.Property(b => b.Role).HasColumnName("role").IsRequired();
+        budget.Property(b => b.Provider).HasColumnName("provider").IsRequired();
+        budget.Property(b => b.Model).HasColumnName("model").IsRequired();
+        budget.Property(b => b.InputTokens).HasColumnName("input_tokens");
+        budget.Property(b => b.OutputTokens).HasColumnName("output_tokens");
+        budget.Property(b => b.CostUsd).HasColumnName("cost_usd");
+        budget.Property(b => b.IsPriced).HasColumnName("is_priced");
+        budget.Property(b => b.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        budget.HasIndex(b => b.RunId).HasDatabaseName(BudgetRunIndex);
+        budget.HasOne<PipelineRun>()
+            .WithMany()
+            .HasForeignKey(b => b.RunId)
+            .HasConstraintName("fk_" + BudgetTable + "_" + RunsTable)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

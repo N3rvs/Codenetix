@@ -16,6 +16,7 @@ using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
 using CodeNetix.Persistence;
 using CodeNetix.Pipeline;
+using CodeNetix.Pipeline.Features.Budget;
 using CodeNetix.Sandbox;
 using CodeNetix.Sandbox.Gateway;
 using Microsoft.Extensions.Logging.Console;
@@ -84,6 +85,24 @@ internal static class ServeMode
             });
         builder.Services.Configure<InstanceLimits>(builder.Configuration.GetSection(LimitsInstanceOptions.SectionName));
         builder.Services.Configure<InstanceOptions>(builder.Configuration.GetSection(InstanceOptions.SectionName));
+        builder.Services.AddOptions<PricingOptions>()
+            .Configure<IOptions<InstanceOptions>>((pricing, instance) =>
+            {
+                pricing.Models.Clear();
+                if (instance.Value.Pricing is not { Count: > 0 })
+                {
+                    return;
+                }
+
+                foreach (var (modelName, entry) in instance.Value.Pricing)
+                {
+                    if (!string.IsNullOrWhiteSpace(modelName)
+                        && entry is { InputPerMillionUsd: >= 0 and var inputUsd, OutputPerMillionUsd: >= 0 and var outputUsd })
+                    {
+                        pricing.Models[modelName.Trim()] = new ModelPricing(inputUsd, outputUsd);
+                    }
+                }
+            });
 
         // Agents y el Egress Gateway no leen el entorno: Host resuelve Proveedor, URL, key y modelo de cada rol. Si la
         // configuración no es coherente, quedan nulos y StartupReconciler publica Diagnostic con el motivo.

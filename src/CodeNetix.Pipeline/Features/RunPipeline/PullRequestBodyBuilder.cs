@@ -52,7 +52,8 @@ internal static class PullRequestBodyBuilder
         TestReport testReport,
         ISecretRedactor redactor,
         decimal? costUsd = null,
-        PolicyResult? policy = null)
+        PolicyResult? policy = null,
+        RunCostSummary? cost = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         ArgumentNullException.ThrowIfNull(verdicts);
@@ -181,7 +182,19 @@ internal static class PullRequestBodyBuilder
 
         // 6. Coste
         sb.AppendLine("## Coste");
-        if (costUsd.HasValue)
+        if (cost is { IsEstimable: true, EstimatedCostUsd: { } usd })
+        {
+            sb.AppendLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"- Coste estimado: ${usd:F4} USD ({cost.TotalInputTokens} tokens entrada / {cost.TotalOutputTokens} tokens salida)"));
+        }
+        else if (cost is { HasUnpricedModels: true })
+        {
+            sb.AppendLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"- Coste: no estimable ({cost.TotalInputTokens} tokens entrada / {cost.TotalOutputTokens} tokens salida; modelo sin precio conocido)"));
+        }
+        else if (cost is null && costUsd.HasValue)
         {
             sb.AppendLine(string.Create(CultureInfo.InvariantCulture, $"- Coste estimado: ${costUsd.Value:F4} USD"));
         }

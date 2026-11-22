@@ -30,6 +30,19 @@ internal sealed class InstanceOptions
     /// enlaza la misma sección en sus <see cref="CodeNetix.Sandbox.SandboxOptions"/>; aquí solo se validan.
     /// </summary>
     public CodeNetix.Sandbox.SandboxOptions Sandbox { get; set; } = new();
+
+    /// <summary>
+    /// Tabla de precios por modelo (<c>CODENETIX__Pricing__&lt;Modelo&gt;__InputPerMillionUsd</c> /
+    /// <c>OutputPerMillionUsd</c>, AD-15). Añade o sobreescribe las tarifas del catálogo por defecto.
+    /// </summary>
+    public Dictionary<string, ModelPricingInstanceOptions> Pricing { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+}
+
+internal sealed class ModelPricingInstanceOptions
+{
+    public decimal? InputPerMillionUsd { get; set; }
+
+    public decimal? OutputPerMillionUsd { get; set; }
 }
 
 internal sealed class AgentsInstanceOptions

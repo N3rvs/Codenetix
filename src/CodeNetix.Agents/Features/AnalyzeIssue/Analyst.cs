@@ -19,8 +19,10 @@ internal sealed partial class Analyst(
     SchemaRetryDecorator retrier,
     IRunEventSink events,
     IOptions<AgentsOptions> options,
-    ILogger<Analyst> logger) : IAnalyst
+    ILogger<Analyst> logger,
+    IBudgetLedger? budgetLedger = null) : IAnalyst
 {
+    public const string RoleName = "Analyst";
     public const string NotConfigured = "no hay ningún Proveedor configurado para el Analista";
 
     public async Task<AnalysisResult> AnalyzeAsync(AnalysisInput input, CancellationToken cancellationToken)
@@ -42,7 +44,8 @@ internal sealed partial class Analyst(
         Microsoft.Extensions.AI.IChatClient client;
         try
         {
-            client = clientFactory.Create(endpoint, model);
+            var rawClient = clientFactory.Create(endpoint, model);
+            client = new BudgetTrackingChatClient(rawClient, budgetLedger, input.RunId, stageId: null, RoleName, endpoint.Provider, model, logger);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or UriFormatException)
         {

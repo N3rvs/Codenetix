@@ -71,8 +71,8 @@ development_status:
   4-5-lanzar-trabajo-desde-el-panel: done
   epic-4-retrospective: optional
 
-  epic-5: backlog
-  5-1-libro-de-presupuesto-y-coste-visible: backlog
+  epic-5: in-progress
+  5-1-libro-de-presupuesto-y-coste-visible: done
   5-2-corte-automático-por-presupuesto: backlog
   5-3-comportamiento-tras-un-reinicio: backlog
   epic-5-retrospective: optional

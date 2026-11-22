@@ -51,6 +51,15 @@ export interface ReviewFinding {
 
 export type RiskClass = "Minor" | "NeedsAttention"
 
+export interface RunCostSummary {
+  estimatedCostUsd: number | null
+  isEstimable: boolean
+  hasUnpricedModels: boolean
+  totalInputTokens: number
+  totalOutputTokens: number
+  budgetLimitUsd: number | null
+}
+
 export type RunEvent =
   | RunEventRunCreated
   | RunEventStateChanged
@@ -296,6 +305,7 @@ export interface RunResponse {
   verdicts: RunVerdict[]
   pullRequest: null | PullRequestInfo
   events: RunEvent[]
+  cost?: null | RunCostSummary
 }
 
 export type RunState = "Received" | "Analyzing" | "Coding" | "Reviewing" | "Deciding" | "PullRequestCreated" | "Failed" | "Cancelled"
@@ -310,6 +320,7 @@ export interface RunSummary {
   objectKey: string
   createdAt: string
   updatedAt: string
+  cost?: null | RunCostSummary
 }
 
 export interface RunVerdict {
