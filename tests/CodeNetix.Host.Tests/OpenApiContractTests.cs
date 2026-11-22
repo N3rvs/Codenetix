@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using CodeNetix.Contracts;
+using CodeNetix.Host.Features.GetRun;
 using Microsoft.Data.Sqlite;
 
 namespace CodeNetix.Host.Tests;
@@ -79,6 +80,7 @@ public sealed class OpenApiContractTests : IDisposable
             ?? throw new InvalidOperationException("Falta 'paths' en /openapi/v1.json.");
 
         Assert.True(paths.ContainsKey("/api/runs"), "Falta '/api/runs' en OpenAPI.");
+        Assert.True(paths.ContainsKey("/api/runs/{id}"), "Falta '/api/runs/{id}' en OpenAPI.");
         Assert.True(paths.ContainsKey("/api/runs/{id}/events"), "Falta '/api/runs/{id}/events' en OpenAPI.");
 
         var schemas = doc["components"]?["schemas"]?.AsObject()
@@ -103,6 +105,93 @@ public sealed class OpenApiContractTests : IDisposable
         var serializedSummary = JsonSerializer.SerializeToNode(sampleSummary, WebJson)?.AsObject()
             ?? throw new InvalidOperationException("No se pudo serializar RunSummary.");
         ValidateObjectAgainstSchema(serializedSummary, runSummarySchema, schemas, nameof(RunSummary));
+
+        // Validar un RunResponse completo (Spec, TestReport, Verdicts, PullRequest y Events) contra GET /api/runs/{id} -> 200.
+        var runResponseSchema = ResolveSchema(
+            paths["/api/runs/{id}"]?["get"]?["responses"]?["200"]?["content"]?["application/json"]?["schema"]?.AsObject()
+                ?? throw new InvalidOperationException("Falta el esquema de respuesta 200 de GET /api/runs/{id}."),
+            schemas);
+
+        var detailRunId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var detailStageId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var detailEventId = Guid.Parse("33333333-3333-3333-3333-333333333333");
+        var detailAt = new DateTimeOffset(2026, 11, 22, 10, 0, 0, TimeSpan.Zero);
+
+        var sampleRunResponse = new RunResponse(
+            detailRunId,
+            "11111111",
+            RunState.PullRequestCreated,
+            null,
+            null,
+            detailEventId,
+            "github:owner/repo#42",
+            detailAt,
+            detailAt.AddMinutes(3),
+            new Spec(
+                "Error al validar límite.",
+                "Falta comprobación de tope máximo.",
+                "Aplicar Math.Min en ListRunsEndpoint.",
+                ["GET /api/runs?limit=500 responde 200"],
+                ["src/CodeNetix.Host/Features/ListRuns/ListRunsEndpoint.cs"]),
+            new TestReport(
+                BuildSucceeded: true,
+                TotalTests: 11,
+                PassedTests: 10,
+                FailedTests: 1,
+                SkippedTests: 0,
+                NewTests: ["CodeNetix.Host.Tests.SampleTest"],
+                FailedTestCases: [new TestCaseResult("CodeNetix.Host.Tests.FailingSample", "Failed", "Assert.Equal() Failure", "at Sample.cs:12")],
+                Duration: TimeSpan.FromSeconds(2.5)),
+            [
+                new RunVerdict(
+                    detailStageId,
+                    1,
+                    ReviewerKind.Security,
+                    VerdictDecision.Approved,
+                    "Cambio seguro y acotado.",
+                    [
+                        new ReviewFinding("info", "src/CodeNetix.Host/Features/ListRuns/ListRunsEndpoint.cs", 39, "Correcto."),
+                        new ReviewFinding("low", "src/CodeNetix.Host/Features/ListRuns/ListRunsEndpoint.cs", null, "Observación general de archivo."),
+                    ],
+                    "claude-sonnet-4-5",
+                    1,
+                    detailAt.AddMinutes(2)),
+            ],
+            new PullRequestInfo(
+                7,
+                "https://github.com/owner/repo/pull/7",
+                "codenetix/11111111-1111-1111-1111-111111111111",
+                "abcdef0123456789abcdef0123456789abcdef01",
+                "Fix: validar limit en /api/runs",
+                detailAt.AddMinutes(3)),
+            [
+                new TokensConsumed("analyst", "anthropic", "claude-sonnet-4-5", 1000, 300) with { RunId = detailRunId, Seq = 1, StageId = detailStageId, At = detailAt },
+                new RiskClassified(RiskClass.Minor, 12, []) with { RunId = detailRunId, Seq = 2, StageId = detailStageId, At = detailAt.AddMinutes(2) },
+                new PullRequestOpened(7, "https://github.com/owner/repo/pull/7", "codenetix/11111111-1111-1111-1111-111111111111", "abcdef0123456789") with { RunId = detailRunId, Seq = 3, StageId = detailStageId, At = detailAt.AddMinutes(3) },
+            ]);
+        var serializedRunResponse = JsonSerializer.SerializeToNode(sampleRunResponse, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar RunResponse.");
+        ValidateObjectAgainstSchema(serializedRunResponse, runResponseSchema, schemas, nameof(RunResponse));
+
+        // Validar también un RunResponse fallido con campos opcionales en null y listas vacías.
+        var failedRunResponse = new RunResponse(
+            detailRunId,
+            "11111111",
+            RunState.Failed,
+            FailureReason.CloneFailed,
+            "Error al clonar el repositorio.",
+            detailEventId,
+            "github:owner/repo#43",
+            detailAt,
+            detailAt.AddSeconds(15),
+            null,
+            null,
+            [],
+            null,
+            []);
+        var serializedFailedRunResponse = JsonSerializer.SerializeToNode(failedRunResponse, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar RunResponse fallido.");
+        ValidateObjectAgainstSchema(serializedFailedRunResponse, runResponseSchema, schemas, $"{nameof(RunResponse)}(Failed)");
 
         // Localizar el esquema del elemento de GET /api/runs/{id}/events -> 200 -> application/json.
         var eventsArraySchema = paths["/api/runs/{id}/events"]?["get"]?["responses"]?["200"]?["content"]?["application/json"]?["schema"]?.AsObject()

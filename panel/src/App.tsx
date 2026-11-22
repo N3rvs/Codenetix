@@ -13,6 +13,7 @@ import {
   fetchHealth,
   fetchRunEvents,
   fetchRuns,
+  isSafeHttpUrl,
   loadStoredToken,
   mergeRunEvents,
   saveStoredToken,
@@ -27,6 +28,7 @@ import {
   type PipelineFlowNode,
 } from './graph/buildPipelineGraph'
 import { LiveTerminal } from './components/LiveTerminal'
+import { RunHistoryView } from './components/RunHistoryView'
 import { selectDefaultNodeId, type TerminalScopeMode } from './terminal/stageOutput'
 
 const exampleCommand = 'docker exec codenetix codenetix fix <url-de-issue>'
@@ -39,14 +41,7 @@ type HealthViewState =
 
 type HubStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting'
 
-function isSafeHttpUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl)
-    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
-  } catch {
-    return false
-  }
-}
+type PanelTab = 'live' | 'history'
 
 function isHubUnauthorizedError(err: unknown): boolean {
   if (!err) return false
@@ -228,7 +223,11 @@ function LivePanel({
   initialRuns: RunSummary[] | null
   onLogout: (reason?: string) => void
 }) {
+  const [activeTab, setActiveTab] = useState<PanelTab>('live')
   const [runs, setRuns] = useState<RunSummary[]>(initialRuns ?? [])
+  const [historyRuns, setHistoryRuns] = useState<RunSummary[]>(initialRuns ?? [])
+  const [loadingHistoryRuns, setLoadingHistoryRuns] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
   const [selectedRunId, setSelectedRunId] = useState<string | null>(initialRuns?.[0]?.runId ?? null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [hasManualNodeSelection, setHasManualNodeSelection] = useState(false)
@@ -242,6 +241,7 @@ function LivePanel({
   const lastContiguousSeqRef = useRef<number>(0)
   const selectedRunIdRef = useRef<string | null>(selectedRunId)
   selectedRunIdRef.current = selectedRunId
+  const historyAbortRef = useRef<AbortController | null>(null)
 
   const syncRunStateFromEvents = useCallback((runId: string, incomingEvents: readonly RunEvent[]) => {
     let lastChange: Extract<RunEvent, { type: 'StateChanged' }> | null = null
@@ -296,11 +296,75 @@ function LivePanel({
     }
   }, [token, onLogout])
 
+  const refreshHistoryRuns = useCallback(async () => {
+    historyAbortRef.current?.abort()
+    const controller = new AbortController()
+    historyAbortRef.current = controller
+
+    setLoadingHistoryRuns(true)
+    try {
+      const list = await fetchRuns(token, 200, controller.signal)
+      if (controller.signal.aborted) {
+        return
+      }
+      setHistoryRuns(list)
+      setHistoryError(null)
+    } catch (err) {
+      if (controller.signal.aborted) {
+        return
+      }
+      if (err instanceof UnauthorizedError) {
+        onLogout(err.message)
+      } else {
+        setHistoryError(
+          err instanceof Error ? err.message : 'Error al cargar el historial de Ejecuciones.',
+        )
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        setLoadingHistoryRuns(false)
+      }
+    }
+  }, [token, onLogout])
+
   useEffect(() => {
     if (initialRuns === null) {
       void refreshRuns()
     }
   }, [initialRuns, refreshRuns])
+
+  useEffect(() => {
+    if (activeTab !== 'history') {
+      return
+    }
+    void refreshHistoryRuns()
+    return () => {
+      historyAbortRef.current?.abort()
+      historyAbortRef.current = null
+    }
+  }, [activeTab, refreshHistoryRuns])
+
+  const handleOpenLiveFromHistory = useCallback(
+    (runId: string) => {
+      const fromHistory = historyRuns.find((r) => r.runId === runId)
+      if (fromHistory) {
+        setRuns((prev) =>
+          prev.some((r) => r.runId === runId)
+            ? prev.map((r) => (r.runId === runId ? fromHistory : r))
+            : [fromHistory, ...prev],
+        )
+      }
+      if (runId !== selectedRunIdRef.current) {
+        setEvents([])
+        setSelectedNodeId(null)
+        setHasManualNodeSelection(false)
+        lastContiguousSeqRef.current = 0
+        setSelectedRunId(runId)
+      }
+      setActiveTab('live')
+    },
+    [historyRuns],
+  )
 
   const catchUpEvents = useCallback(
     async (runId: string, afterSeq: number, signal?: AbortSignal) => {
@@ -347,7 +411,7 @@ function LivePanel({
 
   // Conexión SignalR a /hubs/runs con reconexión automática y reanudación por afterSeq.
   useEffect(() => {
-    if (!selectedRunId) {
+    if (activeTab !== 'live' || !selectedRunId) {
       setHubStatus('disconnected')
       return
     }
@@ -451,7 +515,7 @@ function LivePanel({
         void connection.stop().catch(() => undefined)
       }
     }
-  }, [token, selectedRunId, reconnectAttempt, catchUpEvents, syncRunStateFromEvents, onLogout])
+  }, [activeTab, token, selectedRunId, reconnectAttempt, catchUpEvents, syncRunStateFromEvents, onLogout])
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.runId === selectedRunId) ?? null,
@@ -531,9 +595,35 @@ function LivePanel({
       <header className="topbar">
         <div className="topbar-left">
           <span className="brand">CodeNetix</span>
+          <nav className="view-tabs" role="tablist" aria-label="Vistas del Panel">
+            <button
+              id="tab-live"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'live'}
+              aria-controls="panel-live"
+              className={`view-tab${activeTab === 'live' ? ' active' : ''}`}
+              onClick={() => setActiveTab('live')}
+            >
+              En vivo
+            </button>
+            <button
+              id="tab-history"
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'history'}
+              aria-controls="panel-history"
+              className={`view-tab${activeTab === 'history' ? ' active' : ''}`}
+              onClick={() => setActiveTab('history')}
+            >
+              Historial
+            </button>
+          </nav>
           <span className="pill pill-live">Listo</span>
-          {selectedRun ? <span className={hubPill.className}>{hubPill.label}</span> : null}
-          {selectedRun && hubStatus === 'disconnected' ? (
+          {activeTab === 'live' && selectedRun ? (
+            <span className={hubPill.className}>{hubPill.label}</span>
+          ) : null}
+          {activeTab === 'live' && selectedRun && hubStatus === 'disconnected' ? (
             <button
               type="button"
               className="btn"
@@ -544,16 +634,29 @@ function LivePanel({
           ) : null}
         </div>
         <div className="topbar-right">
-          <button type="button" className="btn" onClick={() => void refreshRuns()} disabled={loadingRuns}>
-            {loadingRuns ? 'Actualizando…' : 'Actualizar'}
-          </button>
+          {activeTab === 'live' ? (
+            <button type="button" className="btn" onClick={() => void refreshRuns()} disabled={loadingRuns}>
+              {loadingRuns ? 'Actualizando…' : 'Actualizar'}
+            </button>
+          ) : null}
           <button type="button" className="btn" onClick={() => onLogout()}>
             Cambiar token
           </button>
         </div>
       </header>
 
-      <div className="panel-body">
+      {activeTab === 'history' ? (
+        <RunHistoryView
+          token={token}
+          runs={historyRuns}
+          loadingRuns={loadingHistoryRuns}
+          runsError={historyError}
+          onRefreshRuns={() => void refreshHistoryRuns()}
+          onOpenLive={handleOpenLiveFromHistory}
+          onLogout={onLogout}
+        />
+      ) : (
+      <div id="panel-live" role="tabpanel" aria-labelledby="tab-live" className="panel-body">
         <aside className="sidebar">
           <div className="sidebar-header">
             <h2>Ejecuciones ({runs.length})</h2>
@@ -684,6 +787,7 @@ function LivePanel({
           )}
         </main>
       </div>
+      )}
     </div>
   )
 }

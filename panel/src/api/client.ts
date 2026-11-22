@@ -1,6 +1,18 @@
-import type { ProblemDetails, RunEvent, RunSummary } from './generated'
+import type { ProblemDetails, RunEvent, RunResponse, RunSummary } from './generated'
 
 export const ADMIN_TOKEN_STORAGE_KEY = 'codenetix.adminToken'
+
+/**
+ * Comprueba que una URL externa usa exclusivamente esquema http: o https: antes de renderizar un enlace.
+ */
+export function isSafeHttpUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:'
+  } catch {
+    return false
+  }
+}
 
 export type HealthStatus = 'Starting' | 'Ready' | 'Diagnostic'
 
@@ -87,6 +99,30 @@ export async function fetchRuns(
   }
 
   return (await response.json()) as RunSummary[]
+}
+
+export async function fetchRunDetail(
+  token: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<RunResponse> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}`, {
+    signal,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (response.status === 401) {
+    throw new UnauthorizedError()
+  }
+
+  if (!response.ok) {
+    throw new Error(await readProblemDetail(response))
+  }
+
+  return (await response.json()) as RunResponse
 }
 
 export async function fetchRunEvents(
