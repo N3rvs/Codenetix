@@ -37,6 +37,9 @@ COPY examples/workflows/codenetix.yml examples/workflows/codenetix.yml
 # Workflow de CI (Historia 6.3): CiWorkflowTests valida su contrato y este Dockerfile.
 COPY .github/workflows/ci.yml .github/workflows/ci.yml
 COPY docker/codenetix.Dockerfile docker/codenetix.Dockerfile
+# Workflow de release y Renovate (Historia 6.4): ReleaseWorkflowTests valida ambos artefactos.
+COPY .github/workflows/release.yml .github/workflows/release.yml
+COPY renovate.json renovate.json
 COPY src/ src/
 COPY tests/CodeNetix.ArchitectureTests/ tests/CodeNetix.ArchitectureTests/
 COPY tests/CodeNetix.Host.Tests/ tests/CodeNetix.Host.Tests/
