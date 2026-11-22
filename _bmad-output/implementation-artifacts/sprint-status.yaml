@@ -79,7 +79,7 @@ development_status:
 
   epic-6: in-progress
   6-1-modo-codenetix-action: done
-  6-2-acción-composite-publicada: backlog
+  6-2-acción-composite-publicada: done
   6-3-ci-del-proyecto: backlog
   6-4-publicación-firmada-de-imágenes: backlog
   6-5-documentación-de-lanzamiento: backlog

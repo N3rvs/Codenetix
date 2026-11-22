@@ -94,8 +94,65 @@ Dentro de un job de GitHub Actions (runner `ubuntu-*` con Docker), `codenetix ac
 con `codenetix`: lee `GITHUB_EVENT_NAME`/`GITHUB_EVENT_PATH`, autoriza a quien puso la etiqueta (permiso de escritura),
 ejecuta la misma cadena que `serve` (Sandbox y Egress Gateway incluidos) sobre una SQLite temporal y vuelca los eventos
 de la Ejecución a la salida del job. No abre el Panel ni los puertos `:5000`/`:5001`. Sale con `0` (PR creado o nada que
-hacer), `1` (Ejecución fallida, actor sin permiso o error) o `2` (uso). La acción `composite` lista para usar llega en la
-siguiente versión.
+hacer), `1` (Ejecución fallida, actor sin permiso o error) o `2` (uso).
+
+### Workflow de ejemplo
+
+Copia [examples/workflows/codenetix.yml](examples/workflows/codenetix.yml) en `.github/workflows/codenetix.yml` de tu
+repositorio y configura el *secret* `ANTHROPIC_API_KEY` (o `OPENAI_API_KEY`):
+
+```yaml
+name: CodeNetix
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  codenetix:
+    if: github.event.label.name == 'codenetix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Ejecutar CodeNetix
+        uses: n3rvs/codenetix@v0.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          # budget-usd: '2.00'
+```
+
+### Inputs de `action.yml`
+
+| Input | Requerido | Por defecto | Descripción |
+| --- | --- | --- | --- |
+| `version` | No | `v0.1.0` | Etiqueta semver de `ghcr.io/n3rvs/codenetix:<tag>` y `ghcr.io/n3rvs/codenetix-sandbox:<tag>` (nunca `latest`) |
+| `github-token` | No | `${{ github.token }}` | Token de GitHub con permisos de escritura en `contents`, `pull-requests` e `issues` |
+| `anthropic-api-key` | No | `''` | API key de Anthropic desde los *secrets* del repositorio |
+| `openai-api-key` | No | `''` | API key de OpenAI desde los *secrets* del repositorio |
+| `label` | No | `codenetix` | Etiqueta de issue que activa CodeNetix |
+| `budget-usd` | No | `''` | Límite máximo de presupuesto por Ejecución en USD |
+| `image` | No | `''` | Override opcional de la imagen principal de CodeNetix |
+| `sandbox-image` | No | `''` | Override opcional de la imagen del Sandbox Docker |
+
+### Permisos de `GITHUB_TOKEN` y avisos de seguridad
+
+- **Permisos necesarios:** el workflow necesita `contents: write`, `pull-requests: write` e `issues: write`. Además, en
+  *Settings → Actions → General* del repositorio debes activar **«Allow GitHub Actions to create and approve pull requests»**
+  para que `GITHUB_TOKEN` pueda abrir Pull Requests.
+- **Aviso sobre forks y *secrets*:** los *secrets* del repositorio no llegan a workflows disparados desde forks. La v1
+  solo se dispara mediante `issues` (`types: [labeled]`) y nunca debe configurarse con `pull_request_target` ni
+  `workflow_run`.
+- **Aviso sobre Pull Requests creados con `GITHUB_TOKEN`:** los PR creados con `GITHUB_TOKEN` no disparan
+  automáticamente otros workflows de CI (comportamiento de seguridad de GitHub para evitar bucles infinitos).
+
+### Variables de entorno de `codenetix action`
 
 | Variable | Por defecto |
 | --- | --- |
