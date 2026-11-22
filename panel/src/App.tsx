@@ -9,10 +9,12 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import {
+  cancelRun,
   clearStoredToken,
   fetchHealth,
   fetchRunEvents,
   fetchRuns,
+  isRunCancellable,
   isSafeHttpUrl,
   loadStoredToken,
   mergeRunEvents,
@@ -237,6 +239,7 @@ function LivePanel({
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [loadingRuns, setLoadingRuns] = useState(initialRuns === null)
+  const [cancellingRunIds, setCancellingRunIds] = useState<ReadonlySet<string>>(() => new Set())
 
   const lastContiguousSeqRef = useRef<number>(0)
   const selectedRunIdRef = useRef<string | null>(selectedRunId)
@@ -571,6 +574,60 @@ function LivePanel({
     return match?.data.label ?? 'Sin nodo'
   }, [graph.nodes, effectiveSelectedNodeId])
 
+  const handleCancelLiveRun = useCallback(
+    async (runId: string) => {
+      setCancellingRunIds((prev) => {
+        const next = new Set(prev)
+        next.add(runId)
+        return next
+      })
+      if (selectedRunIdRef.current === runId) {
+        setErrorMessage(null)
+      }
+      try {
+        const result = await cancelRun(token, runId)
+        setRuns((prev) =>
+          prev.map((r) => {
+            if (r.runId !== runId) {
+              return r
+            }
+            const alreadyTerminal =
+              r.state === 'PullRequestCreated' || r.state === 'Failed' || r.state === 'Cancelled'
+            const nextTerminal =
+              result.state === 'PullRequestCreated' ||
+              result.state === 'Failed' ||
+              result.state === 'Cancelled'
+            if (alreadyTerminal && !nextTerminal) {
+              return r
+            }
+            return { ...r, state: result.state }
+          }),
+        )
+        if (selectedRunIdRef.current === runId) {
+          void catchUpEvents(runId, lastContiguousSeqRef.current)
+        }
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          onLogout(err.message)
+        } else if (selectedRunIdRef.current === runId) {
+          setErrorMessage(
+            err instanceof Error ? err.message : 'No se pudo cancelar la Ejecución.',
+          )
+        }
+      } finally {
+        setCancellingRunIds((prev) => {
+          if (!prev.has(runId)) {
+            return prev
+          }
+          const next = new Set(prev)
+          next.delete(runId)
+          return next
+        })
+      }
+    },
+    [token, onLogout, catchUpEvents],
+  )
+
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: PipelineFlowNode) => {
     setSelectedNodeId(node.id)
     setHasManualNodeSelection(true)
@@ -716,18 +773,38 @@ function LivePanel({
                     {liveRunInfo.failureDetail ? ` — ${liveRunInfo.failureDetail}` : ''}
                   </div>
                 </div>
-                {prOpenedEvent &&
-                prOpenedEvent.type === 'PullRequestOpened' &&
-                isSafeHttpUrl(prOpenedEvent.url) ? (
-                  <a
-                    href={prOpenedEvent.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="btn btn-primary"
+                <div className="run-header-actions">
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    disabled={
+                      !isRunCancellable(liveRunInfo.state) ||
+                      cancellingRunIds.has(selectedRun.runId)
+                    }
+                    title={
+                      isRunCancellable(liveRunInfo.state)
+                        ? 'Cancelar esta Ejecución sin abrir un PR'
+                        : liveRunInfo.state === 'Deciding'
+                          ? 'No se puede cancelar mientras la Ejecución está en Deciding (publicando el PR).'
+                          : `No se puede cancelar una Ejecución en estado ${STATE_LABELS[liveRunInfo.state]}.`
+                    }
+                    onClick={() => void handleCancelLiveRun(selectedRun.runId)}
                   >
-                    Ver PR #{prOpenedEvent.number}
-                  </a>
-                ) : null}
+                    {cancellingRunIds.has(selectedRun.runId) ? 'Cancelando…' : 'Cancelar'}
+                  </button>
+                  {prOpenedEvent &&
+                  prOpenedEvent.type === 'PullRequestOpened' &&
+                  isSafeHttpUrl(prOpenedEvent.url) ? (
+                    <a
+                      href={prOpenedEvent.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn btn-primary"
+                    >
+                      Ver PR #{prOpenedEvent.number}
+                    </a>
+                  ) : null}
+                </div>
               </div>
 
               <div className="graph-container">

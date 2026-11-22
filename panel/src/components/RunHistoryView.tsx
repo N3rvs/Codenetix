@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { fetchRunDetail, isSafeHttpUrl, UnauthorizedError } from '../api/client'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  cancelRun,
+  fetchRunDetail,
+  isRunCancellable,
+  isSafeHttpUrl,
+  UnauthorizedError,
+} from '../api/client'
 import type { RunResponse, RunState, RunSummary, VerdictDecision } from '../api/generated'
 import { STATE_LABELS } from '../graph/buildPipelineGraph'
 import {
@@ -53,9 +59,15 @@ function formatNumber(value: number): string {
 export function RunHistoryDetail({
   detail,
   onOpenLive,
+  onCancelRun,
+  cancelling = false,
+  cancelError = null,
 }: {
   detail: RunResponse
   onOpenLive: (runId: string) => void
+  onCancelRun?: (runId: string) => void
+  cancelling?: boolean
+  cancelError?: string | null
 }) {
   const tokenUsage = useMemo(() => aggregateTokenUsage(detail.events), [detail.events])
   const verdictRounds = useMemo(() => groupVerdictsByRound(detail.verdicts), [detail.verdicts])
@@ -66,6 +78,12 @@ export function RunHistoryDetail({
   const durationLabel = formatDuration(detail.createdAt, detail.updatedAt)
   // El libro de presupuesto (coste en USD) se introducirá en la Épica 5; por ahora no inventamos costes.
   const costDisplay = formatCostDisplay(null)
+  const cancellable = isRunCancellable(detail.state)
+  const cancelTitle = cancellable
+    ? 'Cancelar esta Ejecución sin abrir un PR'
+    : detail.state === 'Deciding'
+      ? 'No se puede cancelar mientras la Ejecución está en Deciding (publicando el PR).'
+      : `No se puede cancelar una Ejecución en estado ${STATE_LABELS[detail.state]}.`
 
   return (
     <div className="history-detail-content">
@@ -83,6 +101,15 @@ export function RunHistoryDetail({
         <div className="history-detail-actions">
           <button
             type="button"
+            className="btn btn-danger"
+            disabled={!cancellable || cancelling}
+            title={cancelTitle}
+            onClick={() => onCancelRun?.(detail.runId)}
+          >
+            {cancelling ? 'Cancelando…' : 'Cancelar'}
+          </button>
+          <button
+            type="button"
             className="btn btn-primary"
             onClick={() => onOpenLive(detail.runId)}
           >
@@ -90,6 +117,12 @@ export function RunHistoryDetail({
           </button>
         </div>
       </header>
+
+      {cancelError ? (
+        <div className="error-banner" role="alert">
+          {cancelError}
+        </div>
+      ) : null}
 
       <section className="history-metrics-grid" aria-label="Resumen de ejecución">
         <div className="history-metric-card">
@@ -420,9 +453,49 @@ export function RunHistoryView({
   )
   const [detailReloadTick, setDetailReloadTick] = useState(0)
   const [detailState, setDetailState] = useState<DetailState>({ kind: 'idle' })
+  const [cancellingRunIds, setCancellingRunIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [cancelError, setCancelError] = useState<string | null>(null)
 
   const selectedRunIdRef = useRef<string | null>(selectedHistoryRunId)
   selectedRunIdRef.current = selectedHistoryRunId
+
+  const handleCancelHistoryRun = useCallback(
+    async (runId: string) => {
+      setCancellingRunIds((prev) => {
+        const next = new Set(prev)
+        next.add(runId)
+        return next
+      })
+      if (selectedRunIdRef.current === runId) {
+        setCancelError(null)
+      }
+      try {
+        await cancelRun(token, runId)
+        onRefreshRuns()
+        if (selectedRunIdRef.current === runId) {
+          setDetailReloadTick((n) => n + 1)
+        }
+      } catch (err) {
+        if (err instanceof UnauthorizedError) {
+          onLogout(err.message)
+        } else if (selectedRunIdRef.current === runId) {
+          setCancelError(
+            err instanceof Error ? err.message : 'No se pudo cancelar la Ejecución.',
+          )
+        }
+      } finally {
+        setCancellingRunIds((prev) => {
+          if (!prev.has(runId)) {
+            return prev
+          }
+          const next = new Set(prev)
+          next.delete(runId)
+          return next
+        })
+      }
+    },
+    [token, onRefreshRuns, onLogout],
+  )
 
   const filteredRuns = useMemo(
     () => filterHistoryRuns(runs, stateFilter, query),
@@ -449,6 +522,7 @@ export function RunHistoryView({
 
     const runId = selectedHistoryRunId
     const controller = new AbortController()
+    setCancelError(null)
     setDetailState({ kind: 'loading', runId })
 
     void fetchRunDetail(token, runId, controller.signal)
@@ -587,7 +661,13 @@ export function RunHistoryView({
             </p>
           </div>
         ) : detailState.kind === 'loaded' && detailState.detail.runId === selectedHistoryRunId ? (
-          <RunHistoryDetail detail={detailState.detail} onOpenLive={onOpenLive} />
+          <RunHistoryDetail
+            detail={detailState.detail}
+            onOpenLive={onOpenLive}
+            onCancelRun={(runId) => void handleCancelHistoryRun(runId)}
+            cancelling={cancellingRunIds.has(detailState.detail.runId)}
+            cancelError={cancelError}
+          />
         ) : detailState.kind === 'error' && detailState.runId === selectedHistoryRunId ? (
           <div className="empty-workspace">
             <div className="error-banner" role="alert">

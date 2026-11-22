@@ -3,6 +3,7 @@ using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Domain;
 using CodeNetix.Pipeline.Events;
+using CodeNetix.Pipeline.Features.CancelRun;
 using CodeNetix.Pipeline.Features.DecideMerge;
 using CodeNetix.Pipeline.Features.ResolveConfig;
 using Microsoft.EntityFrameworkCore;
@@ -66,6 +67,7 @@ internal sealed partial class RunOrchestrator(
     IPullRequestPublisher pullRequestPublisher,
     IRunEventSink events,
     ISandboxManager sandboxes,
+    RunCancellationRegistry cancellationRegistry,
     IOptions<InstanceLimits> limits,
     ILogger<RunOrchestrator> logger) : IRunOrchestrator
 {
@@ -90,50 +92,78 @@ internal sealed partial class RunOrchestrator(
     /// <summary>Timeout acotado para publicar el aviso terminal en GitHub (AD-8, AD-16 paso 7).</summary>
     private static readonly TimeSpan TerminalNotificationTimeout = TimeSpan.FromSeconds(15);
 
-    public async Task RunAsync(Guid runId, CancellationToken cancellationToken)
+    public async Task RunAsync(Guid runId, CancellationToken stoppingToken)
     {
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        var run = await context.Runs.SingleAsync(r => r.Id == runId, cancellationToken).ConfigureAwait(false);
+        // Serializar el arranque con cualquier cancelación directa en BD pendiente para este runId.
+        RunCancellationRegistry.ActiveRunHandle cancelHandle;
+        using (await cancellationRegistry.AcquireRunGateAsync(runId, stoppingToken).ConfigureAwait(false))
+        {
+            cancelHandle = cancellationRegistry.BeginRun(runId, stoppingToken);
+        }
+
+        using var _ = cancelHandle;
+        var runToken = cancelHandle.Token;
+
+        await using var context = await contextFactory.CreateDbContextAsync(stoppingToken).ConfigureAwait(false);
+        var run = await context.Runs.SingleAsync(r => r.Id == runId, stoppingToken).ConfigureAwait(false);
         if (run.State.IsTerminal())
         {
+            cancelHandle.CompleteCancellablePhase();
             return;
         }
 
         ISandboxSession? sandbox = null;
+        PipelineRun? cancelledRun = null;
+        var userCancelled = false;
         var completed = false;
         try
         {
+            ThrowIfUserCancelled(runId, runToken);
+
             if (run.State == RunState.Received)
             {
-                await PrepareRepositoryAsync(context, run, cancellationToken).ConfigureAwait(false);
+                await PrepareRepositoryAsync(context, run, runToken).ConfigureAwait(false);
+                ThrowIfUserCancelled(runId, runToken);
             }
 
             if (run.State == RunState.Analyzing)
             {
-                sandbox = await CreateSandboxAsync(context, run, cancellationToken).ConfigureAwait(false);
+                sandbox = await CreateSandboxAsync(context, run, runToken).ConfigureAwait(false);
+                ThrowIfUserCancelled(runId, runToken);
             }
 
             if (run.State == RunState.Analyzing)
             {
-                await AnalyzeAsync(context, run, cancellationToken).ConfigureAwait(false);
+                await AnalyzeAsync(context, run, runToken).ConfigureAwait(false);
+                ThrowIfUserCancelled(runId, runToken);
             }
 
             if (run.State == RunState.Analyzing)
             {
-                await log.AddTransitionAsync(context, run, run.StartCoding(), cancellationToken).ConfigureAwait(false);
-                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
+                await log.AddTransitionAsync(context, run, run.StartCoding(), runToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, runToken).ConfigureAwait(false);
+                ThrowIfUserCancelled(runId, runToken);
             }
 
             if (run.State == RunState.Coding)
             {
-                await CodeAsync(context, run, sandbox, cancellationToken).ConfigureAwait(false);
-
+                await CodeAsync(context, run, sandbox, runToken, stoppingToken).ConfigureAwait(false);
             }
 
+            completed = true;
+            cancelHandle.CompleteCancellablePhase();
+        }
+        catch (OperationCanceledException) when (cancelHandle.IsUserCancelRequested)
+        {
+            userCancelled = true;
+            cancelHandle.CompleteCancellablePhase();
+            cancelledRun = await CancelActiveRunAsync(runId).ConfigureAwait(false);
             completed = true;
         }
         finally
         {
+            cancelHandle.CompleteCancellablePhase();
+
             // AD-16 paso 8: el Sandbox se libera siempre (cualquier Estado, también al cancelar) y antes del árbol.
             if (sandbox is not null)
             {
@@ -142,11 +172,46 @@ internal sealed partial class RunOrchestrator(
 
             // Una cancelación (apagado) deja la Ejecución en Received para reanudarla; aun así no se deja el árbol:
             // la reanudación vuelve a clonar desde cero.
-            if (!completed || run.State.IsTerminal())
+            if (!completed || run.State.IsTerminal() || userCancelled)
             {
-                await workspace.DeleteAsync(runId, CancellationToken.None).ConfigureAwait(false);
+                try
+                {
+                    await workspace.DeleteAsync(runId, CancellationToken.None).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    LogWorkspaceDeleteFailed(RunShortId.Of(runId), log.Redactor.Redact(ex.Message));
+                }
             }
         }
+
+        if (cancelledRun is not null)
+        {
+            await NotifyTerminalAsync(cancelledRun, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private void ThrowIfUserCancelled(Guid runId, CancellationToken runToken)
+    {
+        if (cancellationRegistry.IsUserCancelRequested(runId))
+        {
+            throw new OperationCanceledException(runToken);
+        }
+    }
+
+    private async Task<PipelineRun?> CancelActiveRunAsync(Guid runId)
+    {
+        await using var cancelContext = await contextFactory.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
+        var current = await cancelContext.Runs.SingleOrDefaultAsync(r => r.Id == runId, CancellationToken.None).ConfigureAwait(false);
+        if (current is null || current.State.IsTerminal() || current.State == RunState.Deciding)
+        {
+            return null;
+        }
+
+        var change = current.Cancel();
+        await log.AddTransitionAsync(cancelContext, current, change, CancellationToken.None).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(cancelContext, CancellationToken.None).ConfigureAwait(false);
+        return current;
     }
 
     /// <summary>AD-16 paso 1: clonar, fijar el <c>BaseSha</c>, validar <c>codenetix.yml</c> y congelar la configuración.</summary>
@@ -222,10 +287,18 @@ internal sealed partial class RunOrchestrator(
         }
     }
 
-    /// <summary>Libera la sesión (nunca lanza) y registra <see cref="SandboxReleased"/>; un fallo al registrarlo solo se anota en el log.</summary>
+    /// <summary>Libera la sesión (nunca lanza) y registra <see cref="SandboxReleased"/>; un fallo solo se anota en el log.</summary>
     private async Task ReleaseSandboxAsync(Guid runId, ISandboxSession sandbox)
     {
-        await sandbox.DisposeAsync().ConfigureAwait(false);
+        try
+        {
+            await sandbox.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            LogSandboxDisposeFailed(RunShortId.Of(runId), log.Redactor.Redact(ex.Message));
+        }
+
         try
         {
             await events.AppendAsync(runId, null, new SandboxReleased(), CancellationToken.None).ConfigureAwait(false);
@@ -235,6 +308,12 @@ internal sealed partial class RunOrchestrator(
             LogSandboxReleasedNotRecorded(RunShortId.Of(runId), ex.Message);
         }
     }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido liberar el Sandbox de la Ejecución {ShortId}: {Reason}.")]
+    private partial void LogSandboxDisposeFailed(string shortId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido borrar el árbol de trabajo de la Ejecución {ShortId}: {Reason}.")]
+    private partial void LogWorkspaceDeleteFailed(string shortId, string reason);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido registrar SandboxReleased de la Ejecución {ShortId}: {Reason}.")]
     private partial void LogSandboxReleasedNotRecorded(string shortId, string reason);
@@ -282,6 +361,7 @@ internal sealed partial class RunOrchestrator(
         var (limited, truncated) = AnalysisInput.LimitFiles(files);
         var input = new AnalysisInput(run.Id, issue.Title, issue.Body, limited, truncated, config);
         var result = await analyst.AnalyzeAsync(input, cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
 
         switch (result)
         {
@@ -437,7 +517,12 @@ internal sealed partial class RunOrchestrator(
     /// de revisión en paralelo y evaluación determinista de Veredictos (<c>Rejected</c>, unanimidad <c>Approved</c>,
     /// o <c>ChangesRequested</c> con transición <c>Reviewing → Coding</c> o <c>ReviewRoundsExhausted</c>).
     /// </summary>
-    private async Task CodeAsync(PipelineDbContext context, PipelineRun run, ISandboxSession? sandbox, CancellationToken cancellationToken)
+    private async Task CodeAsync(
+        PipelineDbContext context,
+        PipelineRun run,
+        ISandboxSession? sandbox,
+        CancellationToken cancellationToken,
+        CancellationToken stoppingToken)
     {
         if (sandbox is null)
         {
@@ -501,17 +586,20 @@ internal sealed partial class RunOrchestrator(
         var maxRounds = Math.Max(1, config.MaxReviewRounds);
         for (var round = 1; round <= maxRounds && run.State == RunState.Coding; round++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             TestReport? passedReport = null;
             string? attemptFeedback = null;
             var roundAttempts = 0;
 
             while (run.State == RunState.Coding && roundAttempts < config.MaxCodingAttempts)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 roundAttempts++;
                 var attemptNumber = run.CodingAttempts + 1;
                 var feedback = CombineFeedback(reviewFeedback, attemptFeedback);
                 var input = new CodingInput(run.Id, attemptNumber, issue.Title, issue.Body, spec, config, sandbox, feedback);
                 var result = await coder.RunAsync(input, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
 
                 switch (result)
                 {
@@ -526,6 +614,8 @@ internal sealed partial class RunOrchestrator(
                             await FailAsync(context, run, FailureReason.StageError, Truncate(TestRunnerFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
                             return;
                         }
+
+                        cancellationToken.ThrowIfCancellationRequested();
 
                         report = RedactTestReport(report);
                         await UpsertTestReportAsync(context, run.Id, report, cancellationToken).ConfigureAwait(false);
@@ -611,7 +701,7 @@ internal sealed partial class RunOrchestrator(
             // 2. Unanimidad Approved → Deciding → clasificar riesgo (AD-9, FR-18), crear commit único, push y abrir PR (FR-17, AD-8).
             if (roundVerdicts.Count > 0 && roundVerdicts.All(v => v.Verdict.Decision == VerdictDecision.Approved))
             {
-                await PublishPullRequestAsync(context, run, owner, repo, number, spec, passedReport, config, roundDiff, roundVerdicts, round, cancellationToken).ConfigureAwait(false);
+                await PublishPullRequestAsync(context, run, owner, repo, number, spec, passedReport, config, roundDiff, roundVerdicts, round, cancellationToken, stoppingToken).ConfigureAwait(false);
                 return;
             }
 
@@ -722,6 +812,7 @@ internal sealed partial class RunOrchestrator(
             cancellationToken)).ToArray();
 
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         var roundVerdicts = new List<(ReviewerKind Reviewer, Verdict Verdict)>(stages.Count);
 
         for (var i = 0; i < stages.Count; i++)
@@ -765,13 +856,14 @@ internal sealed partial class RunOrchestrator(
         try
         {
             var result = await reviewer.ReviewAsync(input, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             return (result, log.UtcNow);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             var detail = Truncate($"Error inesperado del Revisor {input.ReviewerKind}: {ex.Message}");
             var fallback = new ReviewResult(
@@ -960,15 +1052,23 @@ internal sealed partial class RunOrchestrator(
         DiffResult diff,
         IReadOnlyList<(ReviewerKind Reviewer, Verdict Verdict)> roundVerdicts,
         int round,
-        CancellationToken cancellationToken)
+        CancellationToken runToken,
+        CancellationToken stoppingToken)
     {
         if (string.IsNullOrWhiteSpace(run.BaseSha))
         {
-            await FailAsync(context, run, FailureReason.StageError, "la Ejecución no tiene BaseSha para publicar el PR", cancellationToken).ConfigureAwait(false);
+            await FailAsync(context, run, FailureReason.StageError, "la Ejecución no tiene BaseSha para publicar el PR", runToken).ConfigureAwait(false);
             return;
         }
 
-        await log.AddTransitionAsync(context, run, run.StartDeciding(), cancellationToken).ConfigureAwait(false);
+        // Barrera atómica (FR-23, AD-2): si se solicitó cancelación antes de Deciding, abortar sin crear PR.
+        if (!cancellationRegistry.TryEnterDeciding(run.Id))
+        {
+            throw new OperationCanceledException(runToken);
+        }
+
+        // A partir de aquí ya estamos en Deciding: solo el apagado del Host (stoppingToken) puede cancelar.
+        await log.AddTransitionAsync(context, run, run.StartDeciding(), stoppingToken).ConfigureAwait(false);
         var decisionStartedAt = log.UtcNow;
         var decisionStage = new RunStageRecord
         {
@@ -996,16 +1096,16 @@ internal sealed partial class RunOrchestrator(
             context,
             run.Id,
             new RiskClassified(policyResult.RiskClass, diffLines, policyResult.MatchedProtectedPaths),
-            cancellationToken,
+            stoppingToken,
             stageId: decisionStage.Id).ConfigureAwait(false);
-        await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
+        await log.SaveAndPublishAsync(context, stoppingToken).ConfigureAwait(false);
 
         var verdictRecords = await context.Verdicts
             .AsNoTracking()
             .Where(v => v.RunId == run.Id)
             .OrderBy(v => v.Round)
             .ThenBy(v => v.Reviewer)
-            .ToListAsync(cancellationToken)
+            .ToListAsync(stoppingToken)
             .ConfigureAwait(false);
 
         var verdicts = verdictRecords
@@ -1041,12 +1141,12 @@ internal sealed partial class RunOrchestrator(
         PullRequestInfo pr;
         try
         {
-            pr = await pullRequestPublisher.PublishAsync(request, cancellationToken).ConfigureAwait(false);
+            pr = await pullRequestPublisher.PublishAsync(request, stoppingToken).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is PullRequestPublishException or GitOperationBlockedException or RepositoryPreparationException or GitHubUnavailableException)
         {
             decisionStage.CompletedAt = log.UtcNow;
-            await FailAsync(context, run, FailureReason.StageError, Truncate(PullRequestFailedPrefix + ex.Message), cancellationToken).ConfigureAwait(false);
+            await FailAsync(context, run, FailureReason.StageError, Truncate(PullRequestFailedPrefix + ex.Message), stoppingToken).ConfigureAwait(false);
             return;
         }
 

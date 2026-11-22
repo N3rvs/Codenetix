@@ -1,6 +1,7 @@
 using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Events;
+using CodeNetix.Pipeline.Features.CancelRun;
 using CodeNetix.Pipeline.Features.DispatchEvents;
 using CodeNetix.Pipeline.Features.GetRun;
 using CodeNetix.Pipeline.Features.RunPipeline;
@@ -32,6 +33,8 @@ public static class PipelineServiceCollectionExtensions
         services.AddSingleton<RunEventLog>();
         services.AddSingleton<IRunEventSink, RunEventSink>();
         services.AddSingleton<IRunReader, RunReader>();
+        services.AddSingleton<RunCancellationRegistry>();
+        services.AddSingleton<IRunControl, RunControl>();
         services.AddSingleton<EventDispatchSignal>();
         services.AddSingleton<IEventDispatchSignal>(sp => sp.GetRequiredService<EventDispatchSignal>());
         services.AddSingleton<IRunDispatchHandler, RunDispatchHandler>();

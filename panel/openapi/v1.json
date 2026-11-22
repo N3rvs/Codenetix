@@ -222,10 +222,84 @@
           }
         }
       }
+    },
+    "/api/runs/{id}/cancel": {
+      "post": {
+        "tags": [
+          "CancelRunEndpoint"
+        ],
+        "operationId": "CancelRun",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRunResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "CancelRunResponse": {
+        "required": [
+          "runId",
+          "shortId",
+          "state",
+          "cancellationRequested"
+        ],
+        "type": "object",
+        "properties": {
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "shortId": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/RunState"
+          },
+          "cancellationRequested": {
+            "type": "boolean"
+          }
+        }
+      },
       "ConfigSource": {
         "enum": [
           "file",
@@ -1838,6 +1912,9 @@
     },
     {
       "name": "GetRunEventsEndpoint"
+    },
+    {
+      "name": "CancelRunEndpoint"
     }
   ]
 }
