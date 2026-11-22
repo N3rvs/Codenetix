@@ -64,6 +64,18 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
 
     public IReadOnlyList<Request> Requests => [.. _requests];
 
+    /// <summary>
+    /// Contenedores que devuelve <c>GET /containers/json</c> (id → etiquetas): solo los que tienen la etiqueta del
+    /// filtro <c>label</c> de la consulta. <c>DELETE /containers/{id}</c> los quita de aquí.
+    /// </summary>
+    public ConcurrentDictionary<string, IReadOnlyDictionary<string, string>> ListedContainers { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Volúmenes que devuelve <c>GET /volumes</c>; <c>DELETE /volumes/{name}</c> los quita (si no está: 404).</summary>
+    public ConcurrentDictionary<string, byte> ListedVolumes { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>Ids de contenedor o nombres de volumen cuyo <c>DELETE</c> responde 500.</summary>
+    public ConcurrentDictionary<string, byte> FailingRemovals { get; } = new(StringComparer.Ordinal);
+
     public static async Task<FakeDockerEngine> StartAsync()
     {
         var engine = new FakeDockerEngine();
@@ -166,10 +178,44 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
                 await WriteJsonAsync(context, new { Name = "v" });
                 return;
 
+            case ("GET", "/volumes"):
+                await WriteJsonAsync(context, new
+                {
+                    Volumes = ListedVolumes.Keys.Order(StringComparer.Ordinal).Select(name => new { Name = name, Driver = "local" }).ToArray(),
+                    Warnings = Array.Empty<string>(),
+                });
+                return;
+
             case ("DELETE", _) when path.StartsWith("/volumes/", StringComparison.Ordinal):
+            {
+                var name = Uri.UnescapeDataString(path["/volumes/".Length..]);
+                if (FailingRemovals.ContainsKey(name))
+                {
+                    await ErrorAsync(context, 500, "fallo simulado al borrar el volumen");
+                    return;
+                }
+
+                if (ListedVolumes.TryRemove(name, out _))
+                {
+                    context.Response.StatusCode = 204;
+                    return;
+                }
+
                 context.Response.StatusCode = 404;
                 await WriteJsonAsync(context, new { message = "no such volume" });
                 return;
+            }
+
+            case ("GET", "/containers/json"):
+            {
+                var label = LabelFilterOf(context.Request.Query["filters"].ToString());
+                await WriteJsonAsync(context, ListedContainers
+                    .Where(c => label is null || c.Value.ContainsKey(label))
+                    .OrderBy(c => c.Key, StringComparer.Ordinal)
+                    .Select(c => new { Id = c.Key, Labels = c.Value })
+                    .ToArray());
+                return;
+            }
 
             case ("POST", "/containers/create"):
                 if (CreateContainerError is { } error)
@@ -233,8 +279,18 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
                 return;
 
             case ("DELETE", _) when path.StartsWith("/containers/", StringComparison.Ordinal):
+            {
+                var id = Uri.UnescapeDataString(path["/containers/".Length..]);
+                if (FailingRemovals.ContainsKey(id))
+                {
+                    await ErrorAsync(context, 500, "fallo simulado al borrar el contenedor");
+                    return;
+                }
+
+                ListedContainers.TryRemove(id, out _);
                 context.Response.StatusCode = 204;
                 return;
+            }
 
             case ("POST", _) when path.EndsWith("/wait", StringComparison.Ordinal):
                 context.Response.StatusCode = 200;
@@ -268,6 +324,25 @@ internal sealed class FakeDockerEngine : IAsyncDisposable
                 await ErrorAsync(context, 404, $"ruta no simulada: {request.Method} {path}");
                 return;
         }
+    }
+
+    /// <summary>Clave de <c>filters={"label":["clave"]}</c> (o <c>clave=valor</c>, solo la clave); <c>null</c> sin filtro.</summary>
+    private static string? LabelFilterOf(string filters)
+    {
+        if (string.IsNullOrEmpty(filters))
+        {
+            return null;
+        }
+
+        using var json = JsonDocument.Parse(filters);
+        if (!json.RootElement.TryGetProperty("label", out var labels) || labels.GetArrayLength() == 0)
+        {
+            return null;
+        }
+
+        var value = labels[0].GetString() ?? string.Empty;
+        var equals = value.IndexOf('=', StringComparison.Ordinal);
+        return equals < 0 ? value : value[..equals];
     }
 
     private static readonly JsonSerializerOptions PascalCase = new() { PropertyNamingPolicy = null };

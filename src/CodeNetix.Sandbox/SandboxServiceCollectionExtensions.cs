@@ -12,7 +12,8 @@ public static class SandboxServiceCollectionExtensions
 {
     /// <summary>
     /// Registra el módulo Sandbox: <see cref="ISandboxManager"/> (AD-6: ningún otro módulo crea contenedores),
-    /// <see cref="ISandboxHealthCheck"/> y el Egress Gateway (<see cref="ISandboxGateway"/>,
+    /// <see cref="ISandboxHealthCheck"/>, la limpieza de huérfanos del arranque (<see cref="ISandboxReconciler"/>, AD-18)
+    /// y el Egress Gateway (<see cref="ISandboxGateway"/>,
     /// <see cref="LlmReverseProxy"/> con YARP y <see cref="NuGetConnectProxy"/>, AD-7). Necesita
     /// <see cref="IRepositoryWorkspace"/> (GitHub) para exportar el árbol e <see cref="IRunEventSink"/> (Pipeline) para
     /// registrar eventos del Gateway. Las <see cref="SandboxOptions"/> las enlaza Host.
@@ -37,6 +38,7 @@ public static class SandboxServiceCollectionExtensions
         services.TryAddSingleton<NuGetConnectProxy>();
         services.AddHostedService(sp => sp.GetRequiredService<NuGetConnectProxy>());
         services.TryAddSingleton<ISandboxManager, SandboxManager>();
+        services.TryAddSingleton<ISandboxReconciler, SandboxReconciler>();
         services.TryAddSingleton<ISandboxToolsProvisioner, SandboxToolsProvisioner>();
         services.TryAddSingleton<ITestRunner, DotnetTestRunner>();
         services.TryAddSingleton<ISandboxHealthCheck, SandboxHealthCheck>();

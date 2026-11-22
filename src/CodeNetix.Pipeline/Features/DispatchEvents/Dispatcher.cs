@@ -6,10 +6,12 @@ using Microsoft.Extensions.Logging;
 namespace CodeNetix.Pipeline.Features.DispatchEvents;
 
 /// <summary>
-/// Dispatcher (AD-4, AD-18): único creador de Ejecuciones. Espera a que la instancia esté <c>Ready</c> (en
-/// <c>Diagnostic</c> no crea nada); al arrancar vuelve a orquestar las Ejecuciones que quedaron en <c>Received</c>
-/// (corte entre crearlas y orquestarlas), y después despierta con <see cref="IEventDispatchSignal"/> o cada
-/// <see cref="DispatcherOptions.PollInterval"/>. Concurrencia 1: cada Ejecución se entrega al orquestador antes de seguir.
+/// Dispatcher (AD-4, AD-18 paso 5): único creador de Ejecuciones. Espera a que la instancia esté <c>Ready</c> (en
+/// <c>Diagnostic</c> no crea nada), es decir, a que <c>StartupReconciler</c> haya cerrado como
+/// <c>Failed(HostRestarted)</c> toda Ejecución no terminal de antes del reinicio (no se reanuda ninguna) y limpiado
+/// los huérfanos; después despacha los Eventos <c>Accepted</c> pendientes y despierta con
+/// <see cref="IEventDispatchSignal"/> o cada <see cref="DispatcherOptions.PollInterval"/>. Concurrencia 1: cada
+/// Ejecución se entrega al orquestador antes de seguir.
 /// <list type="bullet">
 /// <item>Si el orquestador lanza, la Ejecución se cierra como <c>Failed(StageError)</c> (<see cref="StuckRunRecovery"/>).</item>
 /// <item>Un fallo al despachar un Evento se registra y no detiene el bucle: el Evento se reintenta pasado
@@ -51,24 +53,6 @@ internal sealed partial class Dispatcher(
         {
             try
             {
-                await ResumeReceivedRunsAsync(stoppingToken).ConfigureAwait(false);
-                break;
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                LogLoopFailed(ex);
-                await Task.Delay(options.PollInterval, timeProvider, stoppingToken).ConfigureAwait(false);
-            }
-        }
-
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
                 await DispatchPendingAsync(stoppingToken).ConfigureAwait(false);
                 await signal.WaitAsync(options.PollInterval, stoppingToken).ConfigureAwait(false);
             }
@@ -82,16 +66,6 @@ internal sealed partial class Dispatcher(
                 LogLoopFailed(ex);
                 await Task.Delay(options.PollInterval, timeProvider, stoppingToken).ConfigureAwait(false);
             }
-        }
-    }
-
-    /// <summary>Ejecuciones creadas pero nunca orquestadas (el proceso cayó entre ambos pasos).</summary>
-    private async Task ResumeReceivedRunsAsync(CancellationToken cancellationToken)
-    {
-        foreach (var runId in await recovery.GetReceivedRunIdsAsync(cancellationToken).ConfigureAwait(false))
-        {
-            LogResuming(runId);
-            await OrchestrateAsync(runId, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -148,7 +122,7 @@ internal sealed partial class Dispatcher(
             }
             catch (Exception inner) when (inner is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
-                // Se volverá a intentar en el siguiente arranque (sigue en Received) o en la reconciliación (Épica 5).
+                // Queda no terminal: la reconciliación del siguiente arranque la cerrará como Failed(HostRestarted).
                 LogRecoveryFailed(inner, runId);
             }
         }
@@ -179,9 +153,6 @@ internal sealed partial class Dispatcher(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Dispatcher en marcha: los Eventos aceptados se convierten en Ejecuciones.")]
     private partial void LogStarted();
-
-    [LoggerMessage(Level = LogLevel.Warning, Message = "La Ejecución {RunId} quedó en Received sin orquestar; se reanuda.")]
-    private partial void LogResuming(Guid runId);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Ejecución {RunId} creada para el Evento {EventId} ({ObjectKey}).")]
     private partial void LogRunCreated(Guid runId, Guid eventId, string objectKey);

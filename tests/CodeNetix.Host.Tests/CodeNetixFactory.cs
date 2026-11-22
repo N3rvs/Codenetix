@@ -24,7 +24,8 @@ namespace CodeNetix.Host.Tests;
 /// Los agentes usan <see cref="ChatClient"/> (un <see cref="FakeChatClient"/> que responde una Spec válida) salvo
 /// con <see cref="UseRealChatClient"/>: ningún test llama a un Proveedor real.
 /// El Sandbox es <see cref="Sandbox"/> (un <see cref="FakeSandboxManager"/>) y la comprobación de Docker,
-/// <see cref="SandboxHealth"/> (sin motivos): ningún test de Host necesita Docker ni entra en <c>Diagnostic</c> por él.
+/// <see cref="SandboxHealth"/> (sin motivos) y la limpieza de arranque, <see cref="SandboxReconciler"/>: ningún test de
+/// Host necesita Docker, entra en <c>Diagnostic</c> por él ni borra recursos reales de Docker.
 /// </summary>
 internal sealed class CodeNetixFactory(
     string dataDirectory,
@@ -56,6 +57,12 @@ internal sealed class CodeNetixFactory(
 
     /// <summary>Comprobación de Docker falsa del arranque (sin motivos por defecto).</summary>
     public FakeSandboxHealthCheck SandboxHealth { get; } = new();
+
+    /// <summary>
+    /// Limpieza de huérfanos de Docker falsa (AD-18 paso 4): un Host de pruebas nunca borra contenedores ni volúmenes
+    /// reales (los de <c>SandboxIntegrationTests</c>, que corren en paralelo contra Docker, ni los del usuario).
+    /// </summary>
+    public FakeSandboxReconciler SandboxReconciler { get; } = new();
 
     /// <summary>Provisionador de herramientas falso que no toca npm ni Docker.</summary>
     public FakeSandboxToolsProvisioner ToolsProvisioner { get; } = new();
@@ -144,6 +151,7 @@ internal sealed class CodeNetixFactory(
         {
             services.AddSingleton<ISandboxManager>(Sandbox);
             services.AddSingleton<ISandboxHealthCheck>(SandboxHealth);
+            services.AddSingleton<ISandboxReconciler>(SandboxReconciler);
             services.AddSingleton<ISandboxToolsProvisioner>(ToolsProvisioner);
             services.AddSingleton<ITestRunner>(TestRunner);
         });

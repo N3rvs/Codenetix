@@ -611,6 +611,56 @@ internal sealed partial class RepositoryWorkspace : IRepositoryWorkspace
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Borra cada <c>&lt;WorkspacesDirectory&gt;/&lt;shortId&gt;</c> que quedó en disco (AD-18 paso 4; lo llama el
+    /// arranque cuando ya no hay Ejecuciones activas). Solo toca directorios con forma de <c>shortId</c> (8 caracteres
+    /// hexadecimales en minúscula) que no sean enlaces: cualquier otra cosa del directorio no es de CodeNetix y se respeta.
+    /// </summary>
+    public Task<int> CleanupOrphansAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var root = options.Value.WorkspacesDirectory;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            return Task.FromResult(0);
+        }
+
+        var fullRoot = Path.GetFullPath(root);
+        List<DirectoryInfo> directories;
+        try
+        {
+            if (!Directory.Exists(fullRoot))
+            {
+                return Task.FromResult(0);
+            }
+
+            directories = [.. new DirectoryInfo(fullRoot).EnumerateDirectories()
+                .Where(d => IsShortId(d.Name) && !d.Attributes.HasFlag(FileAttributes.ReparsePoint))];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            LogDeleteFailed(fullRoot, ex.Message);
+            return Task.FromResult(0);
+        }
+
+        var removed = 0;
+        foreach (var directory in directories)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            DeleteTree(directory.FullName);
+            if (!Directory.Exists(directory.FullName))
+            {
+                removed++;
+                LogOrphanDeleted(directory.Name);
+            }
+        }
+
+        return Task.FromResult(removed);
+    }
+
+    private static bool IsShortId(string name) =>
+        name.Length == 8 && name.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f'));
+
     /// <summary><c>&lt;WorkspacesDirectory&gt;/&lt;shortId&gt;</c>.</summary>
     internal string WorkspacePathOf(Guid runId) =>
         TryWorkspacePathOf(runId) ?? throw new RepositoryPreparationException("no hay directorio de árboles de trabajo configurado");
@@ -1038,6 +1088,9 @@ internal sealed partial class RepositoryWorkspace : IRepositoryWorkspace
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Rama {Branch} publicada con commit {CommitSha} (Ejecución {ShortId}).")]
     private partial void LogPushed(string branch, string commitSha, string shortId);
+
+    [LoggerMessage(Level = LogLevel.Information, Message = "Árbol de trabajo huérfano '{ShortId}' eliminado tras el reinicio.")]
+    private partial void LogOrphanDeleted(string shortId);
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido borrar el árbol de trabajo '{Path}': {Reason}.")]
     private partial void LogDeleteFailed(string path, string reason);

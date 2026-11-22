@@ -327,14 +327,23 @@ public sealed class LivePanelHubTests : IDisposable
         var runId = await SubmitManualIssueAndWaitForRunAsync(client, "https://github.com/o/r/issues/4103");
         var sink = factory.Services.GetRequiredService<IRunEventSink>();
 
-        // Fase 1: conectado en vivo, recibir firstBatch por SignalR.
+        // Fase 1: conectado en vivo, recibir firstBatch por SignalR. La Ejecución sigue orquestándose en segundo
+        // plano y añade sus propios eventos entre los del test: se guardan todos los recibidos en vivo (no solo los
+        // esperados) para que la fusión con afterSeq pueda demostrar que no falta ni se repite ninguno.
         var liveReceived = Channel.CreateUnbounded<RunEvent>();
+        var liveBySeq = new ConcurrentDictionary<long, RunEvent>();
+        var liveDuplicates = new ConcurrentQueue<long>();
         await using var connection = CreateHubConnection(factory, CodeNetixFactory.TestAccessToken);
         connection.On<JsonElement>(RunsHub.EventMethod, payload =>
         {
             var ev = JsonSerializer.Deserialize<RunEvent>(payload.GetRawText(), WebJson);
             if (ev is not null && ev.RunId == runId)
             {
+                if (!liveBySeq.TryAdd(ev.Seq, ev))
+                {
+                    liveDuplicates.Enqueue(ev.Seq);
+                }
+
                 liveReceived.Writer.TryWrite(ev);
             }
         });
@@ -377,6 +386,15 @@ public sealed class LivePanelHubTests : IDisposable
             collectedBySeq[liveEv.Seq] = liveEv;
         }
 
+        // Lo recibido en vivo hasta lastSeenSeq (incluidos los eventos del orquestador intercalados).
+        foreach (var (seq, ev) in liveBySeq)
+        {
+            if (seq <= lastSeenSeq)
+            {
+                collectedBySeq[seq] = ev;
+            }
+        }
+
         // Catch-up desde lastSeenSeq (incluye missedBatch y solapa con afterReconnectBatch: debe deduplicar por seq).
         var resumed = await client.GetFromJsonAsync<List<RunEvent>>($"/api/runs/{runId}/events?afterSeq={lastSeenSeq}", WebJson, Ct);
         Assert.NotNull(resumed);
@@ -402,6 +420,9 @@ public sealed class LivePanelHubTests : IDisposable
         {
             Assert.Equal(mergedSlice[i - 1].Seq + 1, mergedSlice[i].Seq);
         }
+
+        // SignalR no entrega dos veces el mismo seq (la deduplicación del Panel no puede tapar un duplicado real).
+        Assert.Empty(liveDuplicates);
 
         // afterSeq < 0 -> 400 Bad Request
         using var badRequest = await client.GetAsync($"/api/runs/{runId}/events?afterSeq=-1", Ct);

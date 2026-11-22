@@ -240,6 +240,25 @@ internal sealed class DockerClient : IDisposable
         return true;
     }
 
+    /// <summary>
+    /// <c>GET /volumes</c>: todos los volúmenes del motor con el valor de la etiqueta <paramref name="label"/> (o
+    /// <c>null</c>). Las entradas sin <c>Name</c> de texto se ignoran.
+    /// </summary>
+    public async Task<IReadOnlyList<DockerResource>> ListVolumesAsync(string label, CancellationToken cancellationToken)
+    {
+        using var response = await SendVersionedAsync(HttpMethod.Get, "/volumes", null, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        using var json = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+        if (!json.RootElement.TryGetProperty("Volumes", out var volumes) || volumes.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return [.. volumes.EnumerateArray()
+            .Where(v => v.ValueKind == JsonValueKind.Object && v.TryGetProperty("Name", out var name) && name.ValueKind == JsonValueKind.String)
+            .Select(v => new DockerResource(v.GetProperty("Name").GetString()!, LabelOf(v, label)))];
+    }
+
     /// <summary><c>GET /volumes?filters={"label":["k=v"]}</c>: nombres de los volúmenes con esa etiqueta.</summary>
     public async Task<IReadOnlyList<string>> ListVolumeNamesAsync(string label, CancellationToken cancellationToken)
     {
@@ -247,7 +266,9 @@ internal sealed class DockerClient : IDisposable
         await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
         using var json = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
         return json.RootElement.TryGetProperty("Volumes", out var volumes) && volumes.ValueKind == JsonValueKind.Array
-            ? [.. volumes.EnumerateArray().Select(v => v.GetProperty("Name").GetString()!)]
+            ? [.. volumes.EnumerateArray()
+                .Where(v => v.ValueKind == JsonValueKind.Object && v.TryGetProperty("Name", out var name) && name.ValueKind == JsonValueKind.String)
+                .Select(v => v.GetProperty("Name").GetString()!)]
             : [];
     }
 
@@ -261,6 +282,33 @@ internal sealed class DockerClient : IDisposable
         using var json = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
         return [.. json.RootElement.EnumerateArray().Select(c => c.GetProperty("Id").GetString()!)];
     }
+
+    /// <summary>
+    /// <c>GET /containers/json?all=true&amp;filters={"label":["k"]}</c>: los contenedores con la etiqueta
+    /// <paramref name="label"/> y su valor. Las entradas sin <c>Id</c> de texto se ignoran.
+    /// </summary>
+    public async Task<IReadOnlyList<DockerResource>> ListContainersAsync(string label, CancellationToken cancellationToken)
+    {
+        using var response = await SendVersionedAsync(HttpMethod.Get, $"/containers/json?all=true&filters={LabelFilter(label)}", null, DefaultRequestTimeout, cancellationToken).ConfigureAwait(false);
+        await EnsureSuccessAsync(response, cancellationToken).ConfigureAwait(false);
+        using var json = await ReadJsonAsync(response, cancellationToken).ConfigureAwait(false);
+        if (json.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return [.. json.RootElement.EnumerateArray()
+            .Where(c => c.ValueKind == JsonValueKind.Object && c.TryGetProperty("Id", out var id) && id.ValueKind == JsonValueKind.String)
+            .Select(c => new DockerResource(c.GetProperty("Id").GetString()!, LabelOf(c, label)))];
+    }
+
+    private static string? LabelOf(JsonElement resource, string label) =>
+        resource.TryGetProperty("Labels", out var labels)
+        && labels.ValueKind == JsonValueKind.Object
+        && labels.TryGetProperty(label, out var value)
+        && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     /// <summary><c>POST /containers/create?name=…</c>; devuelve el id.</summary>
     public async Task<string> CreateContainerAsync(string name, JsonObject body, CancellationToken cancellationToken)
@@ -558,6 +606,9 @@ internal sealed class DockerClient : IDisposable
 }
 
 /// <summary>Error de la API de Docker: <see cref="StatusCode"/> HTTP (0 si no viene de una respuesta) y su mensaje.</summary>
+/// <summary>Contenedor (id) o volumen (nombre) de Docker con el valor de una etiqueta concreta.</summary>
+internal sealed record DockerResource(string Id, string? LabelValue);
+
 internal sealed class DockerApiException(int statusCode, string message) : Exception(message)
 {
     public int StatusCode { get; } = statusCode;

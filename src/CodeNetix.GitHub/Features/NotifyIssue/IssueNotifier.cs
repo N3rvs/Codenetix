@@ -22,7 +22,8 @@ namespace CodeNetix.GitHub.Features.NotifyIssue;
 /// </list>
 /// Las llamadas con la misma clave dentro del proceso se serializan: una segunda llamada concurrente espera, ve la
 /// violación UNIQUE, relee la fila (ya <c>Posted</c>) y no publica. El token nunca se guarda ni se registra.
-/// No hay reintentos en segundo plano (la reconciliación llega en la historia 5.3).
+/// No hay reintentos en segundo plano: el arranque (historia 5.3) vuelve a intentar los avisos <c>RunFailed</c> de las
+/// Ejecuciones cerradas por reinicio que no llegaron a publicarse. El resultado se guarda con un plazo propio.
 /// </summary>
 internal sealed partial class IssueNotifier(
     IDbContextFactory<GitHubDbContext> contextFactory,
@@ -132,7 +133,7 @@ internal sealed partial class IssueNotifier(
             if (await FindMarkedCommentAsync(issuePath, marker, cancellationToken).ConfigureAwait(false) is { } existing)
             {
                 LogAdopted(RunShortId.Of(runId), kind);
-                return await MarkPostedAsync(context, record, existing, cancellationToken).ConfigureAwait(false);
+                return await MarkPostedAsync(context, record, existing).ConfigureAwait(false);
             }
 
             var sanitized = kind == NotificationKind.PullRequestCreated
@@ -142,23 +143,46 @@ internal sealed partial class IssueNotifier(
             var response = await client.PostAsync(issuePath + "/comments", new { body = text }, cancellationToken).ConfigureAwait(false);
             if (response.Status != HttpStatusCode.Created)
             {
-                return await MarkFailedAsync(context, record, Describe(response), cancellationToken).ConfigureAwait(false);
+                return await MarkFailedAsync(context, record, Describe(response)).ConfigureAwait(false);
             }
 
             if (ReadComment(response.Body) is not { } posted)
             {
                 // Publicado pero sin id/URL legibles: una llamada posterior lo adoptará por el marcador.
-                return await MarkFailedAsync(context, record, GitHubApiClient.NotRespondingReason, cancellationToken).ConfigureAwait(false);
+                return await MarkFailedAsync(context, record, GitHubApiClient.NotRespondingReason).ConfigureAwait(false);
             }
 
             LogPosted(RunShortId.Of(runId), kind);
-            return await MarkPostedAsync(context, record, posted, cancellationToken).ConfigureAwait(false);
+            return await MarkPostedAsync(context, record, posted).ConfigureAwait(false);
         }
         catch (GitHubUnavailableException ex)
         {
-            return await MarkFailedAsync(context, record, ex.Message, cancellationToken).ConfigureAwait(false);
+            return await MarkFailedAsync(context, record, ex.Message).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Plazo del llamante agotado (quizá con el comentario ya creado en GitHub): la fila no se queda en Pending;
+            // una llamada posterior lo adoptará por el marcador o lo publicará.
+            try
+            {
+                await MarkFailedAsync(context, record, TimedOutReason).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is DbUpdateException or OperationCanceledException or InvalidOperationException)
+            {
+                // Mejor esfuerzo: la fila queda en Pending y también se reintenta.
+            }
+
+            throw;
         }
     }
+
+    public const string TimedOutReason = "tiempo agotado al publicar el aviso en GitHub";
+
+    /// <summary>
+    /// Plazo propio para guardar el resultado en SQLite: nunca el token del llamante, que puede haber vencido justo
+    /// después de que GitHub creara el comentario.
+    /// </summary>
+    private static readonly TimeSpan PersistTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Comentario del bot (<see cref="IGitHubIdentity"/>, sin distinguir mayúsculas) con <paramref name="marker"/> en
@@ -246,25 +270,27 @@ internal sealed partial class IssueNotifier(
     [System.Text.RegularExpressions.GeneratedRegex(@"[?&]page=(\d{1,9})(?:[&>]|$)", System.Text.RegularExpressions.RegexOptions.None, 1000)]
     private static partial System.Text.RegularExpressions.Regex PageParameter();
 
-    private async Task<IssueNotification> MarkPostedAsync(GitHubDbContext context, NotificationRecord record, Comment comment, CancellationToken cancellationToken)
+    private async Task<IssueNotification> MarkPostedAsync(GitHubDbContext context, NotificationRecord record, Comment comment)
     {
         record.Status = NotificationStatus.Posted;
         record.CommentId = comment.Id;
         record.CommentUrl = comment.Url;
         record.Error = null;
         record.UpdatedAt = timeProvider.GetUtcNow();
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        using var persist = new CancellationTokenSource(PersistTimeout);
+        await context.SaveChangesAsync(persist.Token).ConfigureAwait(false);
         return IssueNotification.Posted(comment.Url);
     }
 
-    private async Task<IssueNotification> MarkFailedAsync(GitHubDbContext context, NotificationRecord record, string error, CancellationToken cancellationToken)
+    private async Task<IssueNotification> MarkFailedAsync(GitHubDbContext context, NotificationRecord record, string error)
     {
         var redacted = TextLimits.Truncate(redactor.Redact(error), MaxErrorLength);
 
         record.Status = NotificationStatus.Failed;
         record.Error = redacted;
         record.UpdatedAt = timeProvider.GetUtcNow();
-        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        using var persist = new CancellationTokenSource(PersistTimeout);
+        await context.SaveChangesAsync(persist.Token).ConfigureAwait(false);
         LogFailed(RunShortId.Of(record.RunId), record.Kind, redacted);
         return IssueNotification.Failed(redacted);
     }

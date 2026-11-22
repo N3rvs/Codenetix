@@ -75,6 +75,20 @@ public interface ISandboxToolsProvisioner
     Task EnsureClaudeCliAsync(ISandboxSession session, CancellationToken cancellationToken);
 }
 
+/// <summary>Resumen de recursos huérfanos eliminados en Docker al arrancar (AD-18, FR-24).</summary>
+public sealed record SandboxCleanupSummary(int ContainersRemoved, int VolumesRemoved);
+
+/// <summary>
+/// Limpieza de recursos huérfanos del Sandbox al arrancar el Host (AD-18, FR-24): detiene y borra contenedores con
+/// etiqueta <c>codenetix.run</c> y volúmenes <c>codenetix-ws-*</c> (preservando siempre <c>codenetix-tools</c> y
+/// cualquier volumen ajeno). Es best-effort y nunca lanza si Docker no responde.
+/// </summary>
+public interface ISandboxReconciler
+{
+    /// <summary>Elimina contenedores y volúmenes huérfanos del Sandbox y devuelve el resumen.</summary>
+    Task<SandboxCleanupSummary> CleanupOrphansAsync(CancellationToken cancellationToken);
+}
+
 /// <summary>Sesión activa registrada en el Egress Gateway para una Ejecución (AD-7).</summary>
 /// <param name="RunId">Identificador de la Ejecución.</param>
 /// <param name="Token">Credencial efímera <c>cnx-run-&lt;runId&gt;-&lt;nonce&gt;</c>.</param>

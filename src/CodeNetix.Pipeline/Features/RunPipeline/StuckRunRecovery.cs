@@ -7,7 +7,8 @@ namespace CodeNetix.Pipeline.Features.RunPipeline;
 
 /// <summary>
 /// Red de seguridad del orquestador: evita que una Ejecución quede no terminal (y su objeto bloqueado) cuando
-/// la orquestación lanza una excepción o el proceso cae entre crear la Ejecución y orquestarla.
+/// la orquestación lanza una excepción. Si el proceso cae, la cierra la reconciliación de arranque
+/// (<see cref="RunStartupReconciler"/>, AD-18).
 /// </summary>
 internal sealed class StuckRunRecovery(
     IDbContextFactory<PipelineDbContext> contextFactory,
@@ -21,18 +22,6 @@ internal sealed class StuckRunRecovery(
     public const string DetailPrefix = "Error interno de orquestación: ";
 
     private static readonly TimeSpan NotificationTimeout = TimeSpan.FromSeconds(15);
-
-    /// <summary>Ejecuciones en <c>Received</c>: creadas pero nunca orquestadas.</summary>
-    public async Task<IReadOnlyList<Guid>> GetReceivedRunIdsAsync(CancellationToken cancellationToken)
-    {
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        return await context.Runs
-            .Where(r => r.State == RunState.Received)
-            .OrderBy(r => r.CreatedAt)
-            .Select(r => r.Id)
-            .ToListAsync(cancellationToken)
-            .ConfigureAwait(false);
-    }
 
     /// <summary>
     /// En un contexto nuevo: si la Ejecución sigue no terminal, <c>Fail(StageError, detalle)</c> con su
