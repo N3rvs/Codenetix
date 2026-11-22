@@ -66,7 +66,7 @@ development_status:
   epic-4: in-progress
   4-1-cadena-de-montaje-en-vivo: done
   4-2-terminal-en-vivo: done
-  4-3-historial-de-ejecuciones: backlog
+  4-3-historial-de-ejecuciones: done
   4-4-cancelar-una-ejecución: backlog
   4-5-lanzar-trabajo-desde-el-panel: backlog
   epic-4-retrospective: optional
