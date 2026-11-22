@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text.Json;
 using CodeNetix.Contracts;
+using Microsoft.Extensions.Options;
 
 namespace CodeNetix.GitHub;
 
@@ -8,12 +9,27 @@ namespace CodeNetix.GitHub;
 /// <c>GET /user</c> → <c>login</c> del token de la instancia. Se cachea tras la primera respuesta con
 /// éxito. Las llamadas concurrentes comparten una única consulta en curso (acotada por el timeout del
 /// cliente); si falla, todas reciben el mismo error y la siguiente llamada vuelve a preguntar.
+/// Con <see cref="GitHubOptions.Login"/> no se llama a GitHub: un <c>GITHUB_TOKEN</c> de Actions no puede leer <c>/user</c>.
 /// </summary>
-internal sealed class GitHubIdentity(GitHubApiClient client) : IGitHubIdentity
+internal sealed class GitHubIdentity : IGitHubIdentity
 {
+    private readonly GitHubApiClient client;
     private readonly Lock _lock = new();
     private Task<string>? _inFlight;
     private string? _login;
+
+    public GitHubIdentity(GitHubApiClient client)
+    {
+        this.client = client;
+    }
+
+    public GitHubIdentity(GitHubApiClient client, IOptions<GitHubOptions> options)
+        : this(client)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var configured = options.Value.Login?.Trim();
+        _login = string.IsNullOrEmpty(configured) ? null : configured;
+    }
 
     public Task<string> GetLoginAsync(CancellationToken cancellationToken)
     {

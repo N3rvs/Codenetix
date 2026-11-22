@@ -610,6 +610,56 @@ public sealed class RunExecutionTests : IDisposable
         Assert.Equal(0L, await ScalarAsync(connection, $"SELECT COUNT(*) FROM run_runs WHERE object_key = '{PoisonObjectKey}';"));
     }
 
+    // --- Observadores de finalización del Dispatcher (Historia 6.1, revisión 1 #9) -------
+
+    [Fact]
+    public async Task Dispatcher_notifies_completion_observers_on_success_even_when_another_observer_throws()
+    {
+        var throwing = new ThrowingCompletionObserver();
+        var recording = new RecordingCompletionObserver();
+        await using var baseFactory = CreateReadyFactory();
+        await using var factory = baseFactory.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.AddSingleton<IRunCompletionObserver>(throwing);
+            s.AddSingleton<IRunCompletionObserver>(recording);
+        }));
+        using var client = Authorized(factory);
+
+        var first = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null, TimeSpan.FromSeconds(5));
+        await recording.WaitForAsync(first.RunId!.Value, TimeSpan.FromSeconds(15), Ct);
+        Assert.Equal("PullRequestCreated", (await GetRunAsync(client, first.RunId.Value.ToString())).State);
+
+        // El observador que lanza no detiene el bucle del Dispatcher: un segundo Evento se despacha y notifica igual.
+        var second = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null, TimeSpan.FromSeconds(5));
+        await recording.WaitForAsync(second.RunId!.Value, TimeSpan.FromSeconds(15), Ct);
+        Assert.Equal("PullRequestCreated", (await GetRunAsync(client, second.RunId.Value.ToString())).State);
+        Assert.True(throwing.Calls >= 2);
+    }
+
+    [Fact]
+    public async Task Dispatcher_notifies_completion_observers_when_orchestrator_throws_and_keeps_running()
+    {
+        var throwing = new ThrowingCompletionObserver();
+        var recording = new RecordingCompletionObserver();
+        await using var baseFactory = CreateReadyFactory();
+        await using var factory = baseFactory.WithWebHostBuilder(b => b.ConfigureTestServices(s =>
+        {
+            s.AddSingleton<IRunOrchestrator>(new ThrowingOrchestrator());
+            s.AddSingleton<IRunCompletionObserver>(throwing);
+            s.AddSingleton<IRunCompletionObserver>(recording);
+        }));
+        using var client = Authorized(factory);
+
+        var first = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null, TimeSpan.FromSeconds(5));
+        await recording.WaitForAsync(first.RunId!.Value, TimeSpan.FromSeconds(15), Ct);
+        Assert.Equal("Failed", (await GetRunAsync(client, first.RunId.Value.ToString())).State);
+
+        var second = await WaitForEventAsync(client, await SubmitAsync(client), e => e.RunId is not null, TimeSpan.FromSeconds(5));
+        await recording.WaitForAsync(second.RunId!.Value, TimeSpan.FromSeconds(15), Ct);
+        Assert.Equal("Failed", (await GetRunAsync(client, second.RunId.Value.ToString())).State);
+        Assert.True(throwing.Calls >= 2);
+    }
+
     private static async Task InsertAcceptedEventAsync(WebApplicationFactory<Program> factory, Guid eventId, string objectKey)
     {
         var contexts = factory.Services.GetRequiredService<IDbContextFactory<IngestionDbContext>>();
@@ -636,6 +686,33 @@ public sealed class RunExecutionTests : IDisposable
     private sealed class NoopOrchestrator : IRunOrchestrator
     {
         public Task RunAsync(Guid runId, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
+    private sealed class ThrowingCompletionObserver : IRunCompletionObserver
+    {
+        private int _calls;
+
+        public int Calls => Volatile.Read(ref _calls);
+
+        public void OnOrchestrationCompleted(Guid runId)
+        {
+            Interlocked.Increment(ref _calls);
+            throw new InvalidOperationException("observador roto");
+        }
+    }
+
+    private sealed class RecordingCompletionObserver : IRunCompletionObserver
+    {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<Guid, TaskCompletionSource> _completed = new();
+
+        public void OnOrchestrationCompleted(Guid runId) =>
+            Get(runId).TrySetResult();
+
+        public Task WaitForAsync(Guid runId, TimeSpan timeout, CancellationToken cancellationToken) =>
+            Get(runId).Task.WaitAsync(timeout, cancellationToken);
+
+        private TaskCompletionSource Get(Guid runId) =>
+            _completed.GetOrAdd(runId, _ => new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously));
     }
 
     /// <summary>Falla siempre con los Eventos de <see cref="PoisonObjectKey"/>; el resto, al despacho real.</summary>

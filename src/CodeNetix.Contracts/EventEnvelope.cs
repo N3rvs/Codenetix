@@ -89,3 +89,75 @@ public interface IManualEventIngestion
     /// </summary>
     Task<ManualEventResult> SubmitAsync(string url, Guid requestId, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Lo que Host lee del runner de GitHub Actions para <c>codenetix action</c> (AD-12). Solo Host lee el entorno.
+/// </summary>
+/// <param name="EventName"><c>GITHUB_EVENT_NAME</c>.</param>
+/// <param name="EventPayloadJson">Contenido de <c>GITHUB_EVENT_PATH</c> (dato no confiable).</param>
+/// <param name="Repository"><c>GITHUB_REPOSITORY</c> (<c>owner/repo</c>), si está definido.</param>
+/// <param name="WorkflowRunId"><c>GITHUB_RUN_ID</c>, si está definido.</param>
+/// <param name="WorkflowRunAttempt"><c>GITHUB_RUN_ATTEMPT</c>, si está definido.</param>
+/// <param name="TriggerLabel">Etiqueta que dispara el trabajo (por defecto <c>codenetix</c>).</param>
+public sealed record GitHubActionEventInput(
+    string EventName,
+    string EventPayloadJson,
+    string? Repository,
+    string? WorkflowRunId,
+    string? WorkflowRunAttempt,
+    string TriggerLabel);
+
+/// <summary>Disparo válido de <c>codenetix action</c>: una issue abierta etiquetada con la etiqueta de disparo.</summary>
+/// <param name="Owner">Owner en minúsculas.</param>
+/// <param name="Repo">Repositorio en minúsculas.</param>
+/// <param name="Sender">Login de quien puso la etiqueta: el actor que se autoriza (FR-26).</param>
+public sealed record GitHubActionTrigger(
+    string Owner,
+    string Repo,
+    long IssueNumber,
+    string Sender,
+    string Label,
+    string ObjectKey,
+    string DedupKey,
+    string? WorkflowRunId,
+    string? WorkflowRunAttempt);
+
+public enum GitHubActionEventKind
+{
+    /// <summary>Issue etiquetada con la etiqueta de disparo: <see cref="GitHubActionEventParse.Trigger"/> tiene valor.</summary>
+    Applicable,
+
+    /// <summary>Evento legítimo que no dispara trabajo (otro evento, otra acción u otra etiqueta, issue cerrada…).</summary>
+    NotApplicable,
+
+    /// <summary>Evento ilegible o incoherente con el entorno del runner.</summary>
+    Invalid,
+}
+
+/// <summary>Resultado de <see cref="IGitHubActionEventIngestion.Parse"/>; <see cref="Reason"/> fuera de <c>Applicable</c>.</summary>
+public sealed record GitHubActionEventParse(GitHubActionEventKind Kind, GitHubActionTrigger? Trigger, string? Reason)
+{
+    public static GitHubActionEventParse Applicable(GitHubActionTrigger trigger) => new(GitHubActionEventKind.Applicable, trigger, null);
+
+    public static GitHubActionEventParse NotApplicable(string reason) => new(GitHubActionEventKind.NotApplicable, null, reason);
+
+    public static GitHubActionEventParse Invalid(string reason) => new(GitHubActionEventKind.Invalid, null, reason);
+}
+
+/// <summary>
+/// Entrada de trabajo de <c>codenetix action</c> (AD-4, AD-12): Fuente <see cref="EventSource.GitHubAction"/>, sin firma
+/// pero con la autorización de FR-26.
+/// </summary>
+public interface IGitHubActionEventIngestion
+{
+    /// <summary>Normaliza el evento del runner sin E/S. Solo <c>issues</c>/<c>labeled</c> con la etiqueta de disparo aplica.</summary>
+    GitHubActionEventParse Parse(GitHubActionEventInput input);
+
+    /// <summary>
+    /// Autoriza a <see cref="GitHubActionTrigger.Sender"/> (escritura en el Repositorio) y persiste el Evento con la clave
+    /// <see cref="GitHubActionTrigger.DedupKey"/> (idempotente). Sin permiso, queda <see cref="EventStatus.Ignored"/>; si
+    /// GitHub no responde, no se persiste nada (<see cref="ManualEventOutcome.Unavailable"/>). Devuelve
+    /// <c>Created</c>, <c>Existing</c> o <c>Unavailable</c>, con la misma forma que el Evento manual.
+    /// </summary>
+    Task<ManualEventResult> SubmitAsync(GitHubActionTrigger trigger, CancellationToken cancellationToken);
+}

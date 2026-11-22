@@ -115,7 +115,15 @@ public sealed class CancelRunTests : IDisposable
         Assert.NotNull(receivedCancelled);
 
         // Verificar que GET /api/runs/{id} refleja Cancelled, FailureReason nulo, SandboxReleased y nunca se creó PR.
+        // SandboxReleased se registra justo después de liberar la sesión: se espera a verlo en vez de leer una sola vez.
         var refreshed = await client.GetFromJsonAsync<RunResponse>($"/api/runs/{runId}", WebJson, Ct);
+        var releasedDeadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        while (refreshed is not null && !refreshed.Events.Any(e => e is SandboxReleased) && DateTimeOffset.UtcNow < releasedDeadline)
+        {
+            await Task.Delay(25, Ct);
+            refreshed = await client.GetFromJsonAsync<RunResponse>($"/api/runs/{runId}", WebJson, Ct);
+        }
+
         Assert.NotNull(refreshed);
         Assert.Equal(RunState.Cancelled, refreshed.State);
         Assert.Null(refreshed.FailureReason);

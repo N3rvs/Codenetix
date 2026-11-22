@@ -29,6 +29,7 @@ internal sealed partial class Dispatcher(
     ISecretRedactor redactor,
     DispatcherOptions options,
     TimeProvider timeProvider,
+    IEnumerable<IRunCompletionObserver> completionObservers,
     ILogger<Dispatcher> logger) : BackgroundService
 {
     public const string UndispatchableReasonPrefix = "no se pudo despachar: ";
@@ -106,7 +107,10 @@ internal sealed partial class Dispatcher(
         }
     }
 
-    /// <summary>Orquesta la Ejecución; si el orquestador lanza, la cierra como <c>Failed(StageError)</c>.</summary>
+    /// <summary>
+    /// Orquesta la Ejecución; si el orquestador lanza, la cierra como <c>Failed(StageError)</c>. Al terminar (también
+    /// por apagado) avisa a los <see cref="IRunCompletionObserver"/>.
+    /// </summary>
     private async Task OrchestrateAsync(Guid runId, CancellationToken cancellationToken)
     {
         try
@@ -124,6 +128,25 @@ internal sealed partial class Dispatcher(
             {
                 // Queda no terminal: la reconciliación del siguiente arranque la cerrará como Failed(HostRestarted).
                 LogRecoveryFailed(inner, runId);
+            }
+        }
+        finally
+        {
+            NotifyCompleted(runId);
+        }
+    }
+
+    private void NotifyCompleted(Guid runId)
+    {
+        foreach (var observer in completionObservers)
+        {
+            try
+            {
+                observer.OnOrchestrationCompleted(runId);
+            }
+            catch (Exception ex)
+            {
+                LogObserverFailed(ex, runId);
             }
         }
     }
@@ -171,6 +194,9 @@ internal sealed partial class Dispatcher(
 
     [LoggerMessage(Level = LogLevel.Error, Message = "No se ha podido cerrar la Ejecución {RunId} tras el fallo del orquestador.")]
     private partial void LogRecoveryFailed(Exception exception, Guid runId);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Un observador del fin de la Ejecución {RunId} ha fallado; se ignora.")]
+    private partial void LogObserverFailed(Exception exception, Guid runId);
 
     [LoggerMessage(Level = LogLevel.Error, Message = "Fallo en el bucle del Dispatcher; se reintenta.")]
     private partial void LogLoopFailed(Exception exception);

@@ -88,6 +88,23 @@ Variables (todas opcionales):
 | `CODENETIX__Agents__Coder__Provider` | Único Proveedor configurado o `Anthropic` |
 | `CODENETIX__Agents__Coder__Model` | `claude-sonnet-5-5` |
 
+## Modo GitHub Action (`codenetix action`)
+
+Dentro de un job de GitHub Actions (runner `ubuntu-*` con Docker), `codenetix action` procesa una issue al etiquetarla
+con `codenetix`: lee `GITHUB_EVENT_NAME`/`GITHUB_EVENT_PATH`, autoriza a quien puso la etiqueta (permiso de escritura),
+ejecuta la misma cadena que `serve` (Sandbox y Egress Gateway incluidos) sobre una SQLite temporal y vuelca los eventos
+de la Ejecución a la salida del job. No abre el Panel ni los puertos `:5000`/`:5001`. Sale con `0` (PR creado o nada que
+hacer), `1` (Ejecución fallida, actor sin permiso o error) o `2` (uso). La acción `composite` lista para usar llega en la
+siguiente versión.
+
+| Variable | Por defecto |
+| --- | --- |
+| `CODENETIX__GitHub__Token` | `GITHUB_TOKEN` (necesita `contents`, `pull-requests` e `issues` de escritura; los PR que crea no disparan workflows) |
+| `CODENETIX__GitHub__Login` | `github-actions[bot]` con `GITHUB_TOKEN` |
+| `CODENETIX__GitHub__ApiUrl` / `CloneBaseUrl` | `GITHUB_API_URL` / `GITHUB_SERVER_URL` |
+| `CODENETIX__Action__Label` | `codenetix` |
+| `CODENETIX__Persistence__DataDirectory` | Directorio temporal bajo `RUNNER_TEMP`, borrado al terminar |
+
 ## Desarrollo
 
 ```bash

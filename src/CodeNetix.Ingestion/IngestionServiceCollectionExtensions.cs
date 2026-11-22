@@ -1,6 +1,7 @@
 using CodeNetix.Contracts;
 using CodeNetix.Ingestion.Data;
 using CodeNetix.Ingestion.Features.DispatchEvents;
+using CodeNetix.Ingestion.Features.SubmitGitHubActionEvent;
 using CodeNetix.Ingestion.Features.SubmitManualEvent;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
@@ -12,7 +13,7 @@ public static class IngestionServiceCollectionExtensions
 {
     /// <summary>
     /// Registra Ingestion: su <c>DbContext</c> (sobre el <see cref="IDatabaseConnection"/> que aporta
-    /// Persistence), su <see cref="IModuleDatabase"/>, <see cref="IManualEventIngestion"/>, <see cref="IAcceptedEventSource"/>
+    /// Persistence), su <see cref="IModuleDatabase"/>, <see cref="IManualEventIngestion"/>, <see cref="IGitHubActionEventIngestion"/>, <see cref="IAcceptedEventSource"/>
     /// e <see cref="IEventReader"/>. Necesita un <see cref="IEventDispatchSignal"/> (lo aporta Pipeline).
     /// </summary>
     public static IServiceCollection AddCodeNetixIngestion(this IServiceCollection services)
@@ -25,6 +26,7 @@ public static class IngestionServiceCollectionExtensions
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IModuleDatabase, IngestionModuleDatabase>();
         services.AddSingleton<IManualEventIngestion, ManualEventIngestion>();
+        services.AddSingleton<IGitHubActionEventIngestion, GitHubActionEventIngestion>();
         services.AddSingleton<AcceptedEventSource>();
         services.AddSingleton<IAcceptedEventSource>(sp => sp.GetRequiredService<AcceptedEventSource>());
         services.AddSingleton<IEventReader>(sp => sp.GetRequiredService<AcceptedEventSource>());
