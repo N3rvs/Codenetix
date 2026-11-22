@@ -127,7 +127,34 @@ internal static class ServeMode
         builder.Services.AddSingleton<AdminTokenStore>();
         builder.Services.AddSingleton<IRunEventPublisher, RunsHubEventPublisher>();
         builder.Services.AddSignalR();
-        builder.Services.AddOpenApi();
+        builder.Services.AddOpenApi(options =>
+        {
+            options.AddDocumentTransformer(async (document, context, cancellationToken) =>
+            {
+                if (document.Paths is not null
+                    && document.Paths.TryGetValue(SubmitManualEventEndpoint.Route, out var pathItem)
+                    && pathItem?.Operations is not null
+                    && pathItem.Operations.TryGetValue(HttpMethod.Post, out var postOperation))
+                {
+                    var schema = await context.GetOrCreateSchemaAsync(typeof(SubmitManualEventRequest), cancellationToken: cancellationToken);
+                    document.Components ??= new Microsoft.OpenApi.OpenApiComponents();
+                    document.Components.Schemas ??= new Dictionary<string, Microsoft.OpenApi.IOpenApiSchema>();
+                    document.Components.Schemas[nameof(SubmitManualEventRequest)] = schema;
+
+                    postOperation.RequestBody = new Microsoft.OpenApi.OpenApiRequestBody
+                    {
+                        Required = true,
+                        Content = new Dictionary<string, Microsoft.OpenApi.OpenApiMediaType>
+                        {
+                            ["application/json"] = new Microsoft.OpenApi.OpenApiMediaType
+                            {
+                                Schema = new Microsoft.OpenApi.OpenApiSchemaReference(nameof(SubmitManualEventRequest), document),
+                            },
+                        },
+                    };
+                }
+            });
+        });
         builder.Services.AddHostedService<StartupReconciler>();
         builder.Services.AddProblemDetails();
 

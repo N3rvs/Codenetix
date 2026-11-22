@@ -24,7 +24,17 @@ internal static class SubmitManualEventEndpoint
 
     public static IEndpointRouteBuilder MapSubmitManualEvent(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapPost(Route, HandleAsync).WithName("SubmitManualEvent");
+        // No usar .Accepts<SubmitManualEventRequest>("application/json") porque ConsumesMatcherPolicy
+        // rechazaría Content-Type != application/json antes de HandleAsync (el contrato exige 400 ProblemDetails).
+        // El requestBody OpenAPI se adjunta mediante un document transformer en ServeMode.
+        endpoints.MapPost(Route, HandleAsync)
+            .WithName("SubmitManualEvent")
+            .Produces<SubmitManualEventResponse>(StatusCodes.Status201Created)
+            .Produces<SubmitManualEventResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status501NotImplemented)
+            .ProducesProblem(StatusCodes.Status502BadGateway)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }
 

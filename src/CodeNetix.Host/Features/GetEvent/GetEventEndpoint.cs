@@ -12,7 +12,10 @@ internal static class GetEventEndpoint
 
     public static IEndpointRouteBuilder MapGetEvent(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet(Route, HandleAsync).WithName("GetEvent");
+        endpoints.MapGet(Route, HandleAsync)
+            .WithName("GetEvent")
+            .Produces<EventResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status404NotFound);
         return endpoints;
     }
 

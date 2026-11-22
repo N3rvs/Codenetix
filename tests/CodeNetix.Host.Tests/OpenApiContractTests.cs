@@ -6,7 +6,9 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using CodeNetix.Contracts;
 using CodeNetix.Host.Features.CancelRun;
+using CodeNetix.Host.Features.GetEvent;
 using CodeNetix.Host.Features.GetRun;
+using CodeNetix.Host.Features.SubmitManualEvent;
 using Microsoft.Data.Sqlite;
 
 namespace CodeNetix.Host.Tests;
@@ -84,6 +86,8 @@ public sealed class OpenApiContractTests : IDisposable
         Assert.True(paths.ContainsKey("/api/runs/{id}"), "Falta '/api/runs/{id}' en OpenAPI.");
         Assert.True(paths.ContainsKey("/api/runs/{id}/events"), "Falta '/api/runs/{id}/events' en OpenAPI.");
         Assert.True(paths.ContainsKey("/api/runs/{id}/cancel"), "Falta '/api/runs/{id}/cancel' en OpenAPI.");
+        Assert.True(paths.ContainsKey("/api/events/manual"), "Falta '/api/events/manual' en OpenAPI.");
+        Assert.True(paths.ContainsKey("/api/events/{eventId}"), "Falta '/api/events/{eventId}' en OpenAPI.");
 
         var schemas = doc["components"]?["schemas"]?.AsObject()
             ?? throw new InvalidOperationException("Falta 'components.schemas' en /openapi/v1.json.");
@@ -208,6 +212,66 @@ public sealed class OpenApiContractTests : IDisposable
         var serializedCancelResponse = JsonSerializer.SerializeToNode(sampleCancelResponse, WebJson)?.AsObject()
             ?? throw new InvalidOperationException("No se pudo serializar CancelRunResponse.");
         ValidateObjectAgainstSchema(serializedCancelResponse, cancelRunResponseSchema, schemas, nameof(CancelRunResponse));
+
+        // Validar SubmitManualEventRequest contra POST /api/events/manual -> requestBody.
+        var submitRequestSchema = ResolveSchema(
+            paths["/api/events/manual"]?["post"]?["requestBody"]?["content"]?["application/json"]?["schema"]?.AsObject()
+                ?? throw new InvalidOperationException("Falta el esquema de requestBody de POST /api/events/manual."),
+            schemas);
+        var sampleSubmitRequest = new SubmitManualEventRequest(
+            "https://github.com/owner/repo/issues/42",
+            "44444444-4444-4444-8444-444444444444");
+        var serializedSubmitRequest = JsonSerializer.SerializeToNode(sampleSubmitRequest, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar SubmitManualEventRequest.");
+        ValidateObjectAgainstSchema(serializedSubmitRequest, submitRequestSchema, schemas, nameof(SubmitManualEventRequest));
+
+        // Validar SubmitManualEventResponse contra POST /api/events/manual -> 201 y 200.
+        var submitCreatedSchema = ResolveSchema(
+            paths["/api/events/manual"]?["post"]?["responses"]?["201"]?["content"]?["application/json"]?["schema"]?.AsObject()
+                ?? throw new InvalidOperationException("Falta el esquema de respuesta 201 de POST /api/events/manual."),
+            schemas);
+        var submitExistingSchema = ResolveSchema(
+            paths["/api/events/manual"]?["post"]?["responses"]?["200"]?["content"]?["application/json"]?["schema"]?.AsObject()
+                ?? throw new InvalidOperationException("Falta el esquema de respuesta 200 de POST /api/events/manual."),
+            schemas);
+
+        var acceptedSubmitSample = new SubmitManualEventResponse(
+            detailEventId,
+            Created: true,
+            Status: "Accepted",
+            Reason: null,
+            Actor: "dev-user",
+            Repository: "owner/repo");
+        var serializedAcceptedSubmit = JsonSerializer.SerializeToNode(acceptedSubmitSample, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar SubmitManualEventResponse (Accepted).");
+        ValidateObjectAgainstSchema(serializedAcceptedSubmit, submitCreatedSchema, schemas, $"{nameof(SubmitManualEventResponse)}(201)");
+
+        var ignoredSubmitSample = new SubmitManualEventResponse(
+            detailEventId,
+            Created: false,
+            Status: "Ignored",
+            Reason: "no autorizado",
+            Actor: "external-user",
+            Repository: "owner/repo");
+        var serializedIgnoredSubmit = JsonSerializer.SerializeToNode(ignoredSubmitSample, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar SubmitManualEventResponse (Ignored).");
+        ValidateObjectAgainstSchema(serializedIgnoredSubmit, submitExistingSchema, schemas, $"{nameof(SubmitManualEventResponse)}(200)");
+
+        // Validar EventResponse contra GET /api/events/{eventId} -> 200.
+        var eventResponseSchema = ResolveSchema(
+            paths["/api/events/{eventId}"]?["get"]?["responses"]?["200"]?["content"]?["application/json"]?["schema"]?.AsObject()
+                ?? throw new InvalidOperationException("Falta el esquema de respuesta 200 de GET /api/events/{eventId}."),
+            schemas);
+
+        var eventWithRunSample = new EventResponse(detailEventId, "Accepted", null, detailRunId);
+        var serializedEventWithRun = JsonSerializer.SerializeToNode(eventWithRunSample, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar EventResponse (con runId).");
+        ValidateObjectAgainstSchema(serializedEventWithRun, eventResponseSchema, schemas, $"{nameof(EventResponse)}(WithRun)");
+
+        var ignoredEventSample = new EventResponse(detailEventId, "Ignored", "objeto ocupado", null);
+        var serializedIgnoredEvent = JsonSerializer.SerializeToNode(ignoredEventSample, WebJson)?.AsObject()
+            ?? throw new InvalidOperationException("No se pudo serializar EventResponse (Ignored).");
+        ValidateObjectAgainstSchema(serializedIgnoredEvent, eventResponseSchema, schemas, $"{nameof(EventResponse)}(Ignored)");
 
         // Localizar el esquema del elemento de GET /api/runs/{id}/events -> 200 -> application/json.
         var eventsArraySchema = paths["/api/runs/{id}/events"]?["get"]?["responses"]?["200"]?["content"]?["application/json"]?["schema"]?.AsObject()
