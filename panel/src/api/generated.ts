@@ -10,6 +10,13 @@ export interface CancelRunResponse {
 
 export type ConfigSource = "file" | "defaults"
 
+export interface EventResponse {
+  eventId: string
+  status: string
+  reason: string | null
+  runId: string | null
+}
+
 export type FailureReason = "InvalidRepoConfig" | "CloneFailed" | "NotAutomatable" | "SchemaInvalid" | "TestsFailed" | "ReviewRejected" | "ReviewRoundsExhausted" | "BudgetExceeded" | "Timeout" | "HostRestarted" | "StageError" | null
 
 export type NotAutomatableCategory = "missing_information" | "too_large" | "out_of_scope"
@@ -323,6 +330,20 @@ export interface Spec {
   proposedChange: string
   acceptanceCriteria: string[]
   affectedFiles: string[]
+}
+
+export interface SubmitManualEventRequest {
+  url: string | null
+  requestId: string | null
+}
+
+export interface SubmitManualEventResponse {
+  eventId: string
+  created: boolean
+  status: string
+  reason: string | null
+  actor: string | null
+  repository: string
 }
 
 export interface TestCaseResult {

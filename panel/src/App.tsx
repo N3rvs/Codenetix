@@ -12,6 +12,7 @@ import {
   cancelRun,
   clearStoredToken,
   fetchHealth,
+  fetchRunDetail,
   fetchRunEvents,
   fetchRuns,
   isRunCancellable,
@@ -30,6 +31,7 @@ import {
   type PipelineFlowNode,
 } from './graph/buildPipelineGraph'
 import { LiveTerminal } from './components/LiveTerminal'
+import { LaunchWorkModal } from './components/LaunchWorkModal'
 import { RunHistoryView } from './components/RunHistoryView'
 import { selectDefaultNodeId, type TerminalScopeMode } from './terminal/stageOutput'
 
@@ -240,10 +242,12 @@ function LivePanel({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [loadingRuns, setLoadingRuns] = useState(initialRuns === null)
   const [cancellingRunIds, setCancellingRunIds] = useState<ReadonlySet<string>>(() => new Set())
+  const [launchModalOpen, setLaunchModalOpen] = useState(false)
 
   const lastContiguousSeqRef = useRef<number>(0)
   const selectedRunIdRef = useRef<string | null>(selectedRunId)
   selectedRunIdRef.current = selectedRunId
+  const runsAbortRef = useRef<AbortController | null>(null)
   const historyAbortRef = useRef<AbortController | null>(null)
 
   const syncRunStateFromEvents = useCallback((runId: string, incomingEvents: readonly RunEvent[]) => {
@@ -276,26 +280,70 @@ function LivePanel({
     )
   }, [])
 
-  const refreshRuns = useCallback(async () => {
+  const refreshRuns = useCallback(async (preferredRunId?: string) => {
+    runsAbortRef.current?.abort()
+    const controller = new AbortController()
+    runsAbortRef.current = controller
+
     setLoadingRuns(true)
     try {
-      const list = await fetchRuns(token)
+      let list = await fetchRuns(token, 50, controller.signal)
+      if (controller.signal.aborted) {
+        return
+      }
+
+      if (preferredRunId && !list.some((r) => r.runId === preferredRunId)) {
+        try {
+          const detail = await fetchRunDetail(token, preferredRunId, controller.signal)
+          if (controller.signal.aborted) {
+            return
+          }
+          const summary: RunSummary = {
+            runId: detail.runId,
+            shortId: detail.shortId,
+            state: detail.state,
+            failureReason: detail.failureReason,
+            failureDetail: detail.failureDetail,
+            eventId: detail.eventId,
+            objectKey: detail.objectKey,
+            createdAt: detail.createdAt,
+            updatedAt: detail.updatedAt,
+          }
+          list = [summary, ...list]
+        } catch (detailErr) {
+          if (controller.signal.aborted) {
+            return
+          }
+          if (detailErr instanceof UnauthorizedError) {
+            throw detailErr
+          }
+        }
+      }
+
       setRuns(list)
       setErrorMessage(null)
       setSelectedRunId((current) => {
+        if (preferredRunId && list.some((r) => r.runId === preferredRunId)) {
+          return preferredRunId
+        }
         if (current && list.some((r) => r.runId === current)) {
           return current
         }
-        return list[0]?.runId ?? null
+        return preferredRunId ?? list[0]?.runId ?? null
       })
     } catch (err) {
+      if (controller.signal.aborted) {
+        return
+      }
       if (err instanceof UnauthorizedError) {
         onLogout(err.message)
       } else {
         setErrorMessage(err instanceof Error ? err.message : 'Error al cargar las Ejecuciones.')
       }
     } finally {
-      setLoadingRuns(false)
+      if (!controller.signal.aborted) {
+        setLoadingRuns(false)
+      }
     }
   }, [token, onLogout])
 
@@ -334,6 +382,10 @@ function LivePanel({
     if (initialRuns === null) {
       void refreshRuns()
     }
+    return () => {
+      runsAbortRef.current?.abort()
+      runsAbortRef.current = null
+    }
   }, [initialRuns, refreshRuns])
 
   useEffect(() => {
@@ -346,6 +398,30 @@ function LivePanel({
       historyAbortRef.current = null
     }
   }, [activeTab, refreshHistoryRuns])
+
+  const handleCloseLaunchModal = useCallback(() => {
+    setLaunchModalOpen(false)
+  }, [])
+
+  const handleRefreshRunsFromModal = useCallback(() => {
+    void refreshRuns()
+  }, [refreshRuns])
+
+  const handleRunLaunched = useCallback(
+    (runId: string) => {
+      setLaunchModalOpen(false)
+      if (runId !== selectedRunIdRef.current) {
+        setEvents([])
+        setSelectedNodeId(null)
+        setHasManualNodeSelection(false)
+        lastContiguousSeqRef.current = 0
+        setSelectedRunId(runId)
+      }
+      setActiveTab('live')
+      void refreshRuns(runId)
+    },
+    [refreshRuns],
+  )
 
   const handleOpenLiveFromHistory = useCallback(
     (runId: string) => {
@@ -691,6 +767,13 @@ function LivePanel({
           ) : null}
         </div>
         <div className="topbar-right">
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => setLaunchModalOpen(true)}
+          >
+            Lanzar trabajo
+          </button>
           {activeTab === 'live' ? (
             <button type="button" className="btn" onClick={() => void refreshRuns()} disabled={loadingRuns}>
               {loadingRuns ? 'Actualizando…' : 'Actualizar'}
@@ -853,6 +936,10 @@ function LivePanel({
                 </section>
               </div>
             </>
+          ) : selectedRunId !== null && loadingRuns ? (
+            <div className="empty-workspace">
+              <p>Cargando Ejecución…</p>
+            </div>
           ) : (
             <div className="empty-workspace">
               <h2>CodeNetix está en marcha</h2>
@@ -865,6 +952,15 @@ function LivePanel({
         </main>
       </div>
       )}
+
+      <LaunchWorkModal
+        open={launchModalOpen}
+        token={token}
+        onClose={handleCloseLaunchModal}
+        onRunLaunched={handleRunLaunched}
+        onRefreshRuns={handleRefreshRunsFromModal}
+        onLogout={onLogout}
+      />
     </div>
   )
 }
