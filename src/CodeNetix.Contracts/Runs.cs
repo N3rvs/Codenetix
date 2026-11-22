@@ -249,3 +249,23 @@ public interface IRunControl
     /// </summary>
     Task<CancelRunResult> RequestCancelAsync(string id, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// Reconciliación de Ejecuciones al arrancar el Host (AD-18, FR-24): cierra toda Ejecución no terminal
+/// (<c>Received</c>, <c>Analyzing</c>, <c>Coding</c>, <c>Reviewing</c> o <c>Deciding</c>) como
+/// <c>Failed(HostRestarted)</c>, libera el índice único activo y publica el aviso terminal en GitHub.
+/// </summary>
+public interface IRunStartupReconciler
+{
+    /// <summary>
+    /// Reconcilia todas las Ejecuciones no terminales y (re)publica, con un plazo acotado, los avisos <c>RunFailed</c>
+    /// de las cerradas por reinicio que aún no constan como publicados.
+    /// </summary>
+    Task<RunReconciliationResult> ReconcileNonTerminalRunsAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>Resultado de <see cref="IRunStartupReconciler.ReconcileNonTerminalRunsAsync"/>.</summary>
+/// <param name="Closed">Ejecuciones cerradas ahora como <c>Failed(HostRestarted)</c>.</param>
+/// <param name="StillActive">Ejecuciones que siguen no terminales (no se pudieron cerrar): la instancia no debe pasar a <c>Ready</c>.</param>
+/// <param name="Notified">Avisos <c>RunFailed</c> intentados en este arranque (nuevos o pendientes de arranques anteriores).</param>
+public sealed record RunReconciliationResult(int Closed, int StillActive, int Notified);

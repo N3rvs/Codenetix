@@ -37,6 +37,8 @@ internal sealed partial class SandboxManager(
 
     public const string ToolsVolume = "codenetix-tools";
 
+    public const string VolumePrefix = "codenetix-ws-";
+
     public const string WorkspacePath = "/workspace";
 
     public const string ToolsPath = "/tools";
@@ -60,7 +62,7 @@ internal sealed partial class SandboxManager(
 
     internal ISandboxGateway Gateway => _gateway;
 
-    public static string VolumeNameOf(Guid runId) => "codenetix-ws-" + runId.ToString("D");
+    public static string VolumeNameOf(Guid runId) => VolumePrefix + runId.ToString("D");
 
     public static string ContainerNameOf(Guid runId) => "codenetix-sbx-" + RunShortId.Of(runId);
 

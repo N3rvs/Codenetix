@@ -99,6 +99,13 @@ public interface IRepositoryWorkspace
 
     /// <summary>Borra el árbol de trabajo de <paramref name="runId"/> (no falla si no existe).</summary>
     Task DeleteAsync(Guid runId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Elimina los árboles de trabajo huérfanos bajo el directorio <c>workspaces/</c> al arrancar el Host (AD-18, FR-24),
+    /// cuando ya no queda ninguna Ejecución activa. Best-effort: un error de E/S en un directorio se registra como
+    /// warning y no lanza; devuelve cuántos directorios se eliminaron.
+    /// </summary>
+    Task<int> CleanupOrphansAsync(CancellationToken cancellationToken);
 }
 
 /// <summary>No se ha podido preparar el repositorio; <see cref="Exception.Message"/> es el motivo (sin el token).</summary>

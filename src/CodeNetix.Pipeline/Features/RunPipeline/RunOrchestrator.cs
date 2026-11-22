@@ -192,8 +192,8 @@ internal sealed partial class RunOrchestrator(
                 await ReleaseSandboxAsync(run.Id, sandbox).ConfigureAwait(false);
             }
 
-            // Una cancelación (apagado) deja la Ejecución en Received para reanudarla; aun así no se deja el árbol:
-            // la reanudación vuelve a clonar desde cero.
+            // Una cancelación por apagado deja la Ejecución no terminal (el siguiente arranque la cierra como
+            // Failed(HostRestarted), AD-18); aun así no se deja el árbol en disco.
             if (!completed || run.State.IsTerminal() || userCancelled || budgetExhausted)
             {
                 try

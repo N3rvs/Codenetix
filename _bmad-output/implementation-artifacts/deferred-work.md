@@ -33,6 +33,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-7-clonar-y-leer-la-configuracion-del-repositorio.md`
   summary: Si el proceso cae entre el guardado terminal y el `finally`, `workspaces/<shortId>` queda en disco.
   evidence: Limpiar árboles huérfanos en la reconciliación al arrancar (5.3). Severidad low.
+  resolved: Historia 5.3 — `IRepositoryWorkspace.CleanupOrphansAsync` (en `RepositoryWorkspace`: solo directorios `<shortId>`, sin seguir enlaces y con archivos `ReadOnly` en Windows) se invoca desde `StartupReconciler` en el paso 4 de AD-18; `StartupReconciliationTests.Restart_removes_orphan_workspace_trees_and_leaves_anything_that_is_not_a_run_tree`.
 
 - source_spec: `_bmad-output/implementation-artifacts/spec-1-8-el-analista-genera-la-spec.md`
   summary: `Providers__<Nombre>__BaseUrl` con `http://` a un host no local envía la key del Proveedor en claro sin pasar a `Diagnostic`.

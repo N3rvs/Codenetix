@@ -29,6 +29,8 @@ RUN dotnet restore src/CodeNetix.Host/CodeNetix.Host.csproj \
  && dotnet restore tests/CodeNetix.Host.Tests/CodeNetix.Host.Tests.csproj
 
 COPY schemas/ schemas/
+# Instantánea del contrato OpenAPI (AD-14): OpenApiContractTests la compara con el /openapi/v1.json del Host.
+COPY panel/openapi/v1.json panel/openapi/v1.json
 COPY src/ src/
 COPY tests/CodeNetix.ArchitectureTests/ tests/CodeNetix.ArchitectureTests/
 COPY tests/CodeNetix.Host.Tests/ tests/CodeNetix.Host.Tests/

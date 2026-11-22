@@ -517,8 +517,12 @@ public sealed class RunExecutionTests : IDisposable
         }
     }
 
+    /// <summary>
+    /// Historia 5.3 (AD-18): una Ejecución que quedó en <c>Received</c> ya no se reanuda (sustituye al comportamiento de
+    /// la 1.6); el arranque la cierra como <c>Failed(HostRestarted)</c> y el objeto queda libre para un Evento nuevo.
+    /// </summary>
     [Fact]
-    public async Task Run_left_in_Received_by_a_crash_is_orchestrated_on_the_next_start()
+    public async Task Run_left_in_Received_by_a_crash_is_failed_as_HostRestarted_on_the_next_start_and_frees_the_object()
     {
         Guid runId;
         await using (var baseFactory = CreateReadyFactory())
@@ -534,9 +538,19 @@ public sealed class RunExecutionTests : IDisposable
         SqliteConnection.ClearAllPools();
         await using var restarted = CreateReadyFactory();
         using var restartedClient = restarted.CreateAuthorizedClient();
-        var run = await WaitForRunAsync(restartedClient, runId.ToString(), r => r.State == "PullRequestCreated");
 
-        Assert.Equal("PullRequestCreated", run.State);
+        // El arranque es síncrono: al responder la API, la reconciliación ya ha terminado.
+        var run = await GetRunAsync(restartedClient, runId.ToString());
+        Assert.Equal("Failed", run.State);
+        Assert.Equal("HostRestarted", run.FailureReason);
+        Assert.Equal(RunStartupReconciler.HostRestartedDetail, run.FailureDetail);
+
+        // El objeto ya no está ocupado: un Evento nuevo crea otra Ejecución que termina normalmente.
+        var next = await WaitForEventAsync(restartedClient, await SubmitAsync(restartedClient), e => e.RunId is not null || e.Status == "Ignored", TimeSpan.FromSeconds(5));
+        Assert.Equal("Accepted", next.Status);
+        Assert.NotEqual(runId, next.RunId);
+        var nextRun = await WaitForRunAsync(restartedClient, next.RunId!.Value.ToString(), r => r.State == "PullRequestCreated");
+        Assert.Equal("PullRequestCreated", nextRun.State);
     }
 
     [Fact]
@@ -652,7 +666,7 @@ public sealed class RunExecutionTests : IDisposable
 
     /// <summary>
     /// Crea una Ejecución en <c>Received</c> como lo hace el Dispatcher (sin pasar por el orquestador). Antes
-    /// espera a que el Dispatcher haya hecho su reanudación de arranque (que cerraría una Ejecución en <c>Received</c>).
+    /// espera a que el Dispatcher esté en marcha (y, con él, a que la reconciliación de arranque haya terminado).
     /// </summary>
     private static async Task<PipelineRun> CreateRunAsync(WebApplicationFactory<Program> factory, string objectKey, Guid? eventId = null)
     {
@@ -671,7 +685,7 @@ public sealed class RunExecutionTests : IDisposable
     private static readonly ConditionalWeakTable<WebApplicationFactory<Program>, object> WarmedUp = [];
 
     /// <summary>
-    /// La reanudación de arranque precede al bucle de despacho: cuando un Evento ya tiene Ejecución, ha terminado.
+    /// El Dispatcher arranca tras la reconciliación (AD-18): cuando un Evento ya tiene Ejecución, ambos están en marcha.
     /// </summary>
     private static async Task WarmUpDispatcherAsync(WebApplicationFactory<Program> factory)
     {

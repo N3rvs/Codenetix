@@ -114,6 +114,29 @@ internal sealed class FakeSandboxHealthCheck : ISandboxHealthCheck
     public Task<IReadOnlyList<string>> CheckAsync(CancellationToken cancellationToken) => Task.FromResult(Reasons);
 }
 
+/// <summary>
+/// <see cref="ISandboxReconciler"/> falso (por defecto en <see cref="CodeNetixFactory"/>): no habla con Docker.
+/// <see cref="OnCleanup"/> permite observar el momento de la llamada en el arranque.
+/// </summary>
+internal sealed class FakeSandboxReconciler : ISandboxReconciler
+{
+    private int _calls;
+
+    public int Calls => Volatile.Read(ref _calls);
+
+    public Action? OnCleanup { get; set; }
+
+    public SandboxCleanupSummary Result { get; set; } = new(0, 0);
+
+    public Task<SandboxCleanupSummary> CleanupOrphansAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Interlocked.Increment(ref _calls);
+        OnCleanup?.Invoke();
+        return Task.FromResult(Result);
+    }
+}
+
 /// <summary><see cref="ISandboxToolsProvisioner"/> falso: no instala paquetes de verdad.</summary>
 internal sealed class FakeSandboxToolsProvisioner : ISandboxToolsProvisioner
 {

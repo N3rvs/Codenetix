@@ -16,8 +16,8 @@ public static class PipelineServiceCollectionExtensions
 {
     /// <summary>
     /// Registra Pipeline: su <c>DbContext</c> y su <see cref="IModuleDatabase"/> (<c>run</c>), el sumidero
-    /// <see cref="IRunEventSink"/>, <see cref="IRunReader"/>, <see cref="IEventDispatchSignal"/>, el orquestador
-    /// y el Dispatcher (<c>BackgroundService</c>). Necesita <see cref="IAcceptedEventSource"/> (Ingestion),
+    /// <see cref="IRunEventSink"/>, <see cref="IRunReader"/>, <see cref="IEventDispatchSignal"/>, el orquestador,
+    /// la reconciliación de arranque (<see cref="IRunStartupReconciler"/>, AD-18) y el Dispatcher (<c>BackgroundService</c>). Necesita <see cref="IAcceptedEventSource"/> (Ingestion),
     /// <see cref="IRepositoryWorkspace"/>, <see cref="IIssueReader"/> e <see cref="IIssueNotifier"/> (GitHub), <see cref="ISandboxManager"/> (Sandbox), <see cref="IAnalyst"/> (Agents), <see cref="IInstanceHealth"/> e <see cref="ISecretRedactor"/> (Host).
     /// Los límites de la instancia (<see cref="InstanceLimits"/>) los enlaza Host.
     /// </summary>
@@ -45,6 +45,7 @@ public static class PipelineServiceCollectionExtensions
         services.AddOptions<InstanceLimits>();
         services.AddSingleton<IRunOrchestrator, RunOrchestrator>();
         services.AddSingleton<StuckRunRecovery>();
+        services.AddSingleton<IRunStartupReconciler, RunStartupReconciler>();
         services.TryAddSingleton(new DispatcherOptions());
         services.AddHostedService<Dispatcher>();
         return services;
