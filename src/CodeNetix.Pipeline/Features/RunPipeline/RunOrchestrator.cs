@@ -115,35 +115,46 @@ internal sealed partial class RunOrchestrator(
 
         ISandboxSession? sandbox = null;
         PipelineRun? cancelledRun = null;
+        PipelineRun? failedBudgetRun = null;
         var userCancelled = false;
+        var budgetExhausted = false;
         var completed = false;
         try
         {
-            ThrowIfUserCancelled(runId, runToken);
+            ThrowIfCancelledOrBudgetExhausted(cancelHandle, runToken);
 
             if (run.State == RunState.Received)
             {
                 await PrepareRepositoryAsync(context, run, runToken).ConfigureAwait(false);
-                ThrowIfUserCancelled(runId, runToken);
+                if (!run.State.IsTerminal())
+                {
+                    ThrowIfCancelledOrBudgetExhausted(cancelHandle, runToken);
+                }
             }
 
             if (run.State == RunState.Analyzing)
             {
                 sandbox = await CreateSandboxAsync(context, run, runToken).ConfigureAwait(false);
-                ThrowIfUserCancelled(runId, runToken);
+                if (!run.State.IsTerminal())
+                {
+                    ThrowIfCancelledOrBudgetExhausted(cancelHandle, runToken);
+                }
             }
 
             if (run.State == RunState.Analyzing)
             {
                 await AnalyzeAsync(context, run, runToken).ConfigureAwait(false);
-                ThrowIfUserCancelled(runId, runToken);
+                if (!run.State.IsTerminal())
+                {
+                    ThrowIfCancelledOrBudgetExhausted(cancelHandle, runToken);
+                }
             }
 
             if (run.State == RunState.Analyzing)
             {
                 await log.AddTransitionAsync(context, run, run.StartCoding(), runToken).ConfigureAwait(false);
                 await log.SaveAndPublishAsync(context, runToken).ConfigureAwait(false);
-                ThrowIfUserCancelled(runId, runToken);
+                ThrowIfCancelledOrBudgetExhausted(cancelHandle, runToken);
             }
 
             if (run.State == RunState.Coding)
@@ -153,6 +164,16 @@ internal sealed partial class RunOrchestrator(
 
             completed = true;
             cancelHandle.CompleteCancellablePhase();
+        }
+        catch (OperationCanceledException) when (cancelHandle.IsBudgetExhausted)
+        {
+            budgetExhausted = true;
+            cancelHandle.CompleteCancellablePhase();
+            var detail = string.IsNullOrWhiteSpace(cancelHandle.BudgetExhaustedDetail)
+                ? "presupuesto agotado"
+                : cancelHandle.BudgetExhaustedDetail;
+            failedBudgetRun = await FailBudgetExceededActiveRunAsync(runId, detail).ConfigureAwait(false);
+            completed = true;
         }
         catch (OperationCanceledException) when (cancelHandle.IsUserCancelRequested)
         {
@@ -165,7 +186,7 @@ internal sealed partial class RunOrchestrator(
         {
             cancelHandle.CompleteCancellablePhase();
 
-            // AD-16 paso 8: el Sandbox se libera siempre (cualquier Estado, también al cancelar) y antes del árbol.
+            // AD-16 paso 8: el Sandbox se libera siempre (cualquier Estado, también al cancelar o agotar presupuesto) y antes del árbol.
             if (sandbox is not null)
             {
                 await ReleaseSandboxAsync(run.Id, sandbox).ConfigureAwait(false);
@@ -173,7 +194,7 @@ internal sealed partial class RunOrchestrator(
 
             // Una cancelación (apagado) deja la Ejecución en Received para reanudarla; aun así no se deja el árbol:
             // la reanudación vuelve a clonar desde cero.
-            if (!completed || run.State.IsTerminal() || userCancelled)
+            if (!completed || run.State.IsTerminal() || userCancelled || budgetExhausted)
             {
                 try
                 {
@@ -186,33 +207,74 @@ internal sealed partial class RunOrchestrator(
             }
         }
 
-        if (cancelledRun is not null)
+        if (failedBudgetRun is not null)
+        {
+            await NotifyTerminalAsync(failedBudgetRun, cancellationToken: CancellationToken.None).ConfigureAwait(false);
+        }
+        else if (cancelledRun is not null)
         {
             await NotifyTerminalAsync(cancelledRun, cancellationToken: CancellationToken.None).ConfigureAwait(false);
         }
     }
 
-    private void ThrowIfUserCancelled(Guid runId, CancellationToken runToken)
+    private static void ThrowIfCancelledOrBudgetExhausted(RunCancellationRegistry.ActiveRunHandle cancelHandle, CancellationToken runToken)
     {
-        if (cancellationRegistry.IsUserCancelRequested(runId))
+        if (cancelHandle.IsBudgetExhausted || cancelHandle.IsUserCancelRequested)
         {
             throw new OperationCanceledException(runToken);
         }
     }
 
+    private async Task<PipelineRun?> FailBudgetExceededActiveRunAsync(Guid runId, string detail)
+    {
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
+        {
+            await using var failContext = await contextFactory.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
+            var current = await failContext.Runs.SingleOrDefaultAsync(r => r.Id == runId, CancellationToken.None).ConfigureAwait(false);
+            if (current is null || current.State.IsTerminal())
+            {
+                return null;
+            }
+
+            var change = current.Fail(FailureReason.BudgetExceeded, Truncate(detail));
+            await log.AddTransitionAsync(failContext, current, change, CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await log.SaveAndPublishAsync(failContext, CancellationToken.None).ConfigureAwait(false);
+                return current;
+            }
+            catch (DbUpdateException ex) when (attempt < maxAttempts && RunEventLog.IsUniqueViolation(ex))
+            {
+                // Otro escritor (p. ej. LlmReverseProxy.ChargeAsync) tomó el mismo seq en run_events: reintentar con contexto limpio.
+            }
+        }
+    }
+
     private async Task<PipelineRun?> CancelActiveRunAsync(Guid runId)
     {
-        await using var cancelContext = await contextFactory.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
-        var current = await cancelContext.Runs.SingleOrDefaultAsync(r => r.Id == runId, CancellationToken.None).ConfigureAwait(false);
-        if (current is null || current.State.IsTerminal() || current.State == RunState.Deciding)
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
         {
-            return null;
-        }
+            await using var cancelContext = await contextFactory.CreateDbContextAsync(CancellationToken.None).ConfigureAwait(false);
+            var current = await cancelContext.Runs.SingleOrDefaultAsync(r => r.Id == runId, CancellationToken.None).ConfigureAwait(false);
+            if (current is null || current.State.IsTerminal() || current.State == RunState.Deciding)
+            {
+                return null;
+            }
 
-        var change = current.Cancel();
-        await log.AddTransitionAsync(cancelContext, current, change, CancellationToken.None).ConfigureAwait(false);
-        await log.SaveAndPublishAsync(cancelContext, CancellationToken.None).ConfigureAwait(false);
-        return current;
+            var change = current.Cancel();
+            await log.AddTransitionAsync(cancelContext, current, change, CancellationToken.None).ConfigureAwait(false);
+            try
+            {
+                await log.SaveAndPublishAsync(cancelContext, CancellationToken.None).ConfigureAwait(false);
+                return current;
+            }
+            catch (DbUpdateException ex) when (attempt < maxAttempts && RunEventLog.IsUniqueViolation(ex))
+            {
+                // Otro escritor tomó el mismo seq en run_events: reintentar con contexto limpio.
+            }
+        }
     }
 
     /// <summary>AD-16 paso 1: clonar, fijar el <c>BaseSha</c>, validar <c>codenetix.yml</c> y congelar la configuración.</summary>
@@ -362,6 +424,12 @@ internal sealed partial class RunOrchestrator(
         var (limited, truncated) = AnalysisInput.LimitFiles(files);
         var input = new AnalysisInput(run.Id, issue.Title, issue.Body, limited, truncated, config);
         var result = await analyst.AnalyzeAsync(input, cancellationToken).ConfigureAwait(false);
+        if (result is AnalysisResult.BudgetExhausted exhausted)
+        {
+            await FailAsync(context, run, FailureReason.BudgetExceeded, Truncate(exhausted.Detail), CancellationToken.None).ConfigureAwait(false);
+            return;
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         switch (result)
@@ -600,6 +668,12 @@ internal sealed partial class RunOrchestrator(
                 var feedback = CombineFeedback(reviewFeedback, attemptFeedback);
                 var input = new CodingInput(run.Id, attemptNumber, issue.Title, issue.Body, spec, config, sandbox, feedback);
                 var result = await coder.RunAsync(input, cancellationToken).ConfigureAwait(false);
+                if (result is CodingResult.BudgetExhausted exhausted)
+                {
+                    await FailAsync(context, run, FailureReason.BudgetExceeded, Truncate(exhausted.Detail), CancellationToken.None).ConfigureAwait(false);
+                    return;
+                }
+
                 cancellationToken.ThrowIfCancellationRequested();
 
                 switch (result)
@@ -813,6 +887,18 @@ internal sealed partial class RunOrchestrator(
             cancellationToken)).ToArray();
 
         var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        var budgetExhaustedReview = results
+            .Select(static r => r.Result)
+            .FirstOrDefault(static r => r.BudgetExhausted);
+        if (budgetExhaustedReview is not null)
+        {
+            var detail = string.IsNullOrWhiteSpace(budgetExhaustedReview.Verdict.Summary)
+                ? "presupuesto agotado"
+                : budgetExhaustedReview.Verdict.Summary;
+            await FailAsync(context, run, FailureReason.BudgetExceeded, Truncate(detail), CancellationToken.None).ConfigureAwait(false);
+            return null;
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         var roundVerdicts = new List<(ReviewerKind Reviewer, Verdict Verdict)>(stages.Count);
 
@@ -857,6 +943,11 @@ internal sealed partial class RunOrchestrator(
         try
         {
             var result = await reviewer.ReviewAsync(input, cancellationToken).ConfigureAwait(false);
+            if (result.BudgetExhausted)
+            {
+                return (result, log.UtcNow);
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
             return (result, log.UtcNow);
         }

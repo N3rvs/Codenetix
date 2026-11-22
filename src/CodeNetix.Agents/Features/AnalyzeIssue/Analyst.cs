@@ -34,6 +34,16 @@ internal sealed partial class Analyst(
             return new AnalysisResult.ProviderError(NotConfigured);
         }
 
+        if (budgetLedger is not null)
+        {
+            var currentCost = await budgetLedger.GetRunCostAsync(input.RunId, cancellationToken).ConfigureAwait(false);
+            if (currentCost.IsExhausted)
+            {
+                return new AnalysisResult.BudgetExhausted(
+                    BudgetTrackingChatClient.FormatExhaustedDetail(currentCost.EstimatedCostUsd, currentCost.BudgetLimitUsd));
+            }
+        }
+
         var model = input.Config.Models?.Analyst is { } repoModel && !string.IsNullOrWhiteSpace(repoModel)
             ? repoModel.Trim()
             : endpoint.Model;
@@ -41,7 +51,7 @@ internal sealed partial class Analyst(
         var call = new StructuredCall(AnalystPrompt.System, AnalystPrompt.User(input), endpoint.StructuredOutput);
         LogAnalyzing(RunShortId.Of(input.RunId), endpoint.Provider, model, endpoint.StructuredOutput);
 
-        Microsoft.Extensions.AI.IChatClient client;
+        BudgetTrackingChatClient client;
         try
         {
             var rawClient = clientFactory.Create(endpoint, model);
@@ -66,11 +76,17 @@ internal sealed partial class Analyst(
                 cancellationToken).ConfigureAwait(false);
         }
 
+        if (client.BudgetExhausted)
+        {
+            return new AnalysisResult.BudgetExhausted(client.BudgetExhaustedDetail ?? "presupuesto agotado");
+        }
+
         return outcome switch
         {
             StructuredOutcome<AnalystOutput>.Success ok => ToResult(ok.Value, ok.Attempts, model),
             StructuredOutcome<AnalystOutput>.Invalid invalid => new AnalysisResult.SchemaInvalid(invalid.LastError, invalid.Attempts),
             StructuredOutcome<AnalystOutput>.ProviderFailed failed => new AnalysisResult.ProviderError(failed.Detail),
+            StructuredOutcome<AnalystOutput>.BudgetExhausted exhausted => new AnalysisResult.BudgetExhausted(exhausted.Detail),
             _ => throw new InvalidOperationException("Resultado de salida estructurada desconocido."),
         };
     }

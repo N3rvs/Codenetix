@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using CodeNetix.Contracts;
 using Microsoft.Extensions.AI;
@@ -21,6 +22,12 @@ internal sealed partial class BudgetTrackingChatClient(
     ILogger? logger = null) : DelegatingChatClient(innerClient)
 {
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
+
+    /// <summary>Indica si algún cargo de este cliente devolvió <see cref="BudgetChargeOutcome.Exhausted"/>.</summary>
+    public bool BudgetExhausted { get; private set; }
+
+    /// <summary>Detalle legible del agotamiento de presupuesto cuando <see cref="BudgetExhausted"/> es <c>true</c>.</summary>
+    public string? BudgetExhaustedDetail { get; private set; }
 
     public override async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
@@ -103,15 +110,26 @@ internal sealed partial class BudgetTrackingChatClient(
         {
             // Se usa CancellationToken.None para no perder el registro de una llamada LLM ya consumida
             // si el timeout de la llamada al proveedor expira justo al terminar la respuesta.
-            await budgetLedger.ChargeAsync(
+            var chargeResult = await budgetLedger.ChargeAsync(
                 new BudgetChargeRequest(runId, stageId, role, provider, effectiveModel, inputTokens, outputTokens),
                 CancellationToken.None).ConfigureAwait(false);
+
+            if (chargeResult.Outcome == BudgetChargeOutcome.Exhausted)
+            {
+                BudgetExhausted = true;
+                BudgetExhaustedDetail = FormatExhaustedDetail(chargeResult.TotalEstimatedCostUsd, chargeResult.BudgetLimitUsd);
+            }
         }
         catch (Exception ex)
         {
             LogBudgetChargeFailed(_logger, RunShortId.Of(runId), role, effectiveModel, ex.Message);
         }
     }
+
+    internal static string FormatExhaustedDetail(decimal? spentUsd, decimal? limitUsd) =>
+        spentUsd.HasValue && limitUsd.HasValue
+            ? string.Create(CultureInfo.InvariantCulture, $"presupuesto agotado: ${spentUsd.Value:F4} USD de ${limitUsd.Value:F4} USD")
+            : "presupuesto agotado";
 
     private static int ClampToInt(long? value)
     {

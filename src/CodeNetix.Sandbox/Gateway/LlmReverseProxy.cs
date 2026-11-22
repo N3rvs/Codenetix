@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -177,6 +178,51 @@ public sealed partial class LlmReverseProxy : IDisposable
             return;
         }
 
+        if (_budgetLedger is not null)
+        {
+            RunCostSummary currentCost;
+            try
+            {
+                currentCost = await _budgetLedger.GetRunCostAsync(session.RunId, context.RequestAborted).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                LogBudgetCheckFailed(RunShortId.Of(session.RunId), ex.Message);
+                await Results.Problem(
+                        statusCode: StatusCodes.Status503ServiceUnavailable,
+                        title: "No se pudo verificar el presupuesto de la Ejecución",
+                        detail: "El libro de presupuesto no está disponible temporalmente; la petición no se ha reenviado al Proveedor.")
+                    .ExecuteAsync(context).ConfigureAwait(false);
+                return;
+            }
+
+            if (currentCost.IsExhausted)
+            {
+                var detail = currentCost is { EstimatedCostUsd: { } spent, BudgetLimitUsd: { } limit }
+                    ? string.Create(CultureInfo.InvariantCulture, $"La Ejecución alcanzó su límite de presupuesto (${spent:F4} USD de ${limit:F4} USD).")
+                    : "La Ejecución ha agotado su presupuesto configurado.";
+
+                context.Response.StatusCode = StatusCodes.Status402PaymentRequired;
+                context.Response.ContentType = "application/json; charset=utf-8";
+                await context.Response.WriteAsJsonAsync(
+                    new
+                    {
+                        type = BudgetCodes.BudgetExhausted,
+                        title = "Presupuesto agotado",
+                        status = StatusCodes.Status402PaymentRequired,
+                        detail,
+                        error = new
+                        {
+                            type = BudgetCodes.BudgetExhausted,
+                            code = BudgetCodes.BudgetExhausted,
+                            message = detail,
+                        },
+                    },
+                    context.RequestAborted).ConfigureAwait(false);
+                return;
+            }
+        }
+
         var requestModel = await TryReadRequestModelAsync(context.Request, context.RequestAborted).ConfigureAwait(false);
         var targetUri = BuildTargetUri(coder.BaseUrl, rest!, context.Request.QueryString);
         var destinationPrefix = coder.BaseUrl.GetLeftPart(UriPartial.Authority);
@@ -336,6 +382,9 @@ public sealed partial class LlmReverseProxy : IDisposable
 
     [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido registrar TokensConsumed de la Ejecución {ShortId}: {Reason}.")]
     private partial void LogTokensNotRecorded(string shortId, string reason);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "No se ha podido verificar el presupuesto de la Ejecución {ShortId} en el Gateway: {Reason}.")]
+    private partial void LogBudgetCheckFailed(string shortId, string reason);
 
     private sealed class LlmProxyTransformer(Uri targetUri, string apiKey) : HttpTransformer
     {

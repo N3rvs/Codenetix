@@ -73,7 +73,7 @@ development_status:
 
   epic-5: in-progress
   5-1-libro-de-presupuesto-y-coste-visible: done
-  5-2-corte-automático-por-presupuesto: backlog
+  5-2-corte-automático-por-presupuesto: done
   5-3-comportamiento-tras-un-reinicio: backlog
   epic-5-retrospective: optional
 

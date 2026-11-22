@@ -40,6 +40,21 @@ internal sealed partial class ReviewerAgent(
             ? repoModel.Trim()
             : endpoint.Model;
 
+        if (budgetLedger is not null)
+        {
+            var currentCost = await budgetLedger.GetRunCostAsync(input.RunId, cancellationToken).ConfigureAwait(false);
+            if (currentCost.IsExhausted)
+            {
+                var detail = BudgetTrackingChatClient.FormatExhaustedDetail(currentCost.EstimatedCostUsd, currentCost.BudgetLimitUsd);
+                return new ReviewResult(
+                    new Verdict(VerdictDecision.ChangesRequested, detail, []),
+                    Attempts: 0,
+                    Model: model,
+                    FallbackDueToError: false,
+                    BudgetExhausted: true);
+            }
+        }
+
         var call = new StructuredCall(
             ReviewerPrompt.SystemFor(input.ReviewerKind),
             ReviewerPrompt.User(input),
@@ -47,7 +62,7 @@ internal sealed partial class ReviewerAgent(
 
         LogReviewing(shortId, input.Round, input.ReviewerKind, endpoint.Provider, model, endpoint.StructuredOutput);
 
-        Microsoft.Extensions.AI.IChatClient client;
+        BudgetTrackingChatClient client;
         try
         {
             var rawClient = clientFactory.Create(endpoint, model);
@@ -87,10 +102,29 @@ internal sealed partial class ReviewerAgent(
                 cancellationToken).ConfigureAwait(false);
         }
 
+        if (client.BudgetExhausted)
+        {
+            var detail = client.BudgetExhaustedDetail ?? "presupuesto agotado";
+            return new ReviewResult(
+                new Verdict(VerdictDecision.ChangesRequested, detail, []),
+                Attempts: rejectedAttempts + 1,
+                Model: model,
+                FallbackDueToError: false,
+                BudgetExhausted: true);
+        }
+
         switch (outcome)
         {
             case StructuredOutcome<Verdict>.Success ok:
                 return new ReviewResult(ok.Value, ok.Attempts, model);
+
+            case StructuredOutcome<Verdict>.BudgetExhausted exhausted:
+                return new ReviewResult(
+                    new Verdict(VerdictDecision.ChangesRequested, exhausted.Detail, []),
+                    Attempts: rejectedAttempts + 1,
+                    Model: model,
+                    FallbackDueToError: false,
+                    BudgetExhausted: true);
 
             case StructuredOutcome<Verdict>.Invalid invalid:
             {

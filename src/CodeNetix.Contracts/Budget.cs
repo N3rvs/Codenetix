@@ -2,6 +2,13 @@ using System.Text.Json.Serialization;
 
 namespace CodeNetix.Contracts;
 
+/// <summary>Códigos de error estables relacionados con el control de presupuesto (AD-15, FR-13).</summary>
+public static class BudgetCodes
+{
+    /// <summary>Código estable devuelto por el Gateway (<c>402 Payment Required</c>) y reconocido por los adaptadores.</summary>
+    public const string BudgetExhausted = "codenetix:budget_exhausted";
+}
+
 /// <summary>
 /// Tarifa de un modelo en dólares estadounidenses (USD) por cada millón de tokens de entrada y de salida (AD-15).
 /// </summary>
@@ -51,6 +58,21 @@ public sealed record RunCostSummary(
     int TotalOutputTokens,
     decimal? BudgetLimitUsd)
 {
+    /// <summary>Indica si el coste acumulado estimable alcanzó o superó <see cref="BudgetLimitUsd"/>.</summary>
+    [JsonIgnore]
+    public bool IsExhausted =>
+        IsEstimable
+        && EstimatedCostUsd.HasValue
+        && BudgetLimitUsd.HasValue
+        && EstimatedCostUsd.Value >= BudgetLimitUsd.Value;
+
+    /// <summary>Presupuesto restante en USD (mínimo <c>0</c>), o <c>null</c> si no aplica o no es estimable.</summary>
+    [JsonIgnore]
+    public decimal? RemainingUsd =>
+        IsEstimable && EstimatedCostUsd.HasValue && BudgetLimitUsd.HasValue
+            ? Math.Max(0m, decimal.Round(BudgetLimitUsd.Value - EstimatedCostUsd.Value, 8, MidpointRounding.AwayFromZero))
+            : null;
+
     /// <summary>Resumen vacío cuando la Ejecución todavía no tiene cargos registrados.</summary>
     public static RunCostSummary Empty { get; } = new(
         EstimatedCostUsd: null,
