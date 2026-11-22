@@ -31,8 +31,10 @@ RUN dotnet restore src/CodeNetix.Host/CodeNetix.Host.csproj \
 COPY schemas/ schemas/
 # Instantánea del contrato OpenAPI (AD-14): OpenApiContractTests la compara con el /openapi/v1.json del Host.
 COPY panel/openapi/v1.json panel/openapi/v1.json
-# Artefactos de la acción composite (Historia 6.2): CompositeActionTests los valida.
+# Artefactos de la acción composite (Historia 6.2) y documentación de lanzamiento (Historia 6.5):
+# CompositeActionTests y ReleaseDocumentationTests los validan.
 COPY action.yml README.md ./
+COPY SECURITY.md LICENSE CONTRIBUTING.md ./
 COPY examples/workflows/codenetix.yml examples/workflows/codenetix.yml
 # Workflow de CI (Historia 6.3): CiWorkflowTests valida su contrato y este Dockerfile.
 COPY .github/workflows/ci.yml .github/workflows/ci.yml

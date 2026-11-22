@@ -77,12 +77,12 @@ development_status:
   5-3-comportamiento-tras-un-reinicio: done
   epic-5-retrospective: optional
 
-  epic-6: in-progress
+  epic-6: done
   6-1-modo-codenetix-action: done
   6-2-acción-composite-publicada: done
   6-3-ci-del-proyecto: done
   6-4-publicación-firmada-de-imágenes: done
-  6-5-documentación-de-lanzamiento: backlog
+  6-5-documentación-de-lanzamiento: done
   epic-6-retrospective: optional
 
   epic-7: backlog

@@ -27,4 +27,4 @@ git rebase --signoff main              # varios commits
 
 ## Seguridad
 
-No abras issues públicas para reportar vulnerabilidades. Consulta `SECURITY.md`.
+No abras issues públicas para reportar vulnerabilidades. Consulta [SECURITY.md](SECURITY.md).
