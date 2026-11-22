@@ -2,11 +2,12 @@ using CodeNetix.Contracts;
 using CodeNetix.Pipeline.Data;
 using CodeNetix.Pipeline.Domain;
 using CodeNetix.Pipeline.Events;
+using CodeNetix.Pipeline.Features.Budget;
 using Microsoft.EntityFrameworkCore;
 
 namespace CodeNetix.Pipeline.Features.GetRun;
 
-/// <summary>Consultas de lectura de <c>run_runs</c>, <c>run_events</c> y <c>run_specs</c> (<c>GET /api/runs/…</c>).</summary>
+/// <summary>Consultas de lectura de <c>run_runs</c>, <c>run_events</c>, <c>run_specs</c> y <c>run_budget</c> (<c>GET /api/runs/…</c>).</summary>
 internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFactory) : IRunReader
 {
     public async Task<IReadOnlyList<RunSummary>> ListRecentAsync(int limit, CancellationToken cancellationToken)
@@ -21,7 +22,34 @@ internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFact
             .ToListAsync(cancellationToken)
             .ConfigureAwait(false);
 
-        return [.. rows.Select(r => new RunSummary(r.Id, r.ShortId, r.State, r.FailureReason, r.FailureDetail, r.EventId, r.ObjectKey, r.CreatedAt, r.UpdatedAt))];
+        if (rows.Count == 0)
+        {
+            return [];
+        }
+
+        var runIds = rows.Select(r => r.Id).ToArray();
+        var charges = await context.BudgetCharges
+            .AsNoTracking()
+            .Where(b => runIds.Contains(b.RunId))
+            .Select(b => new BudgetLedger.BudgetChargeProjection(b.RunId, b.InputTokens, b.OutputTokens, b.CostUsd, b.IsPriced))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var chargesByRun = charges.ToLookup(c => c.RunId);
+        return
+        [
+            .. rows.Select(r => new RunSummary(
+                r.Id,
+                r.ShortId,
+                r.State,
+                r.FailureReason,
+                r.FailureDetail,
+                r.EventId,
+                r.ObjectKey,
+                r.CreatedAt,
+                r.UpdatedAt,
+                BudgetLedger.Summarize(chargesByRun[r.Id], r.GetEffectiveConfig()?.BudgetUsd))),
+        ];
     }
 
     public async Task<RunSummary?> FindAsync(string id, CancellationToken cancellationToken)
@@ -45,9 +73,20 @@ internal sealed class RunReader(IDbContextFactory<PipelineDbContext> contextFact
         }
 
         var run = await query.AsNoTracking().FirstOrDefaultAsync(cancellationToken).ConfigureAwait(false);
-        return run is null
-            ? null
-            : new RunSummary(run.Id, run.ShortId, run.State, run.FailureReason, run.FailureDetail, run.EventId, run.ObjectKey, run.CreatedAt, run.UpdatedAt);
+        if (run is null)
+        {
+            return null;
+        }
+
+        var charges = await context.BudgetCharges
+            .AsNoTracking()
+            .Where(b => b.RunId == run.Id)
+            .Select(b => new BudgetLedger.BudgetChargeProjection(b.RunId, b.InputTokens, b.OutputTokens, b.CostUsd, b.IsPriced))
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        var cost = BudgetLedger.Summarize(charges, run.GetEffectiveConfig()?.BudgetUsd);
+        return new RunSummary(run.Id, run.ShortId, run.State, run.FailureReason, run.FailureDetail, run.EventId, run.ObjectKey, run.CreatedAt, run.UpdatedAt, cost);
     }
 
     public async Task<IReadOnlyList<RunEvent>> GetEventsAsync(Guid runId, long afterSeq, CancellationToken cancellationToken)

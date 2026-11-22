@@ -52,6 +52,9 @@ internal sealed class FakeChatClient : IChatClient
     /// <summary>Manejador dinámico opcional por llamada (cuando hay paralelismo o respuestas por especialidad).</summary>
     public Func<Call, CancellationToken, Task<string>>? Handler { get; set; }
 
+    /// <summary>Uso de tokens opcional que se adjunta a cada <see cref="ChatResponse"/> devuelta.</summary>
+    public UsageDetails? DefaultUsage { get; set; }
+
     /// <summary><c>{"outcome":"spec","spec":&lt;specJson&gt;}</c>.</summary>
     public static string SpecAnswer(string specJson) => $$"""{"outcome":"spec","spec":{{specJson}}}""";
 
@@ -111,7 +114,10 @@ internal sealed class FakeChatClient : IChatClient
             text = isVerdictCall ? _defaultVerdictResponse : _defaultResponse;
         }
 
-        return new ChatResponse(new ChatMessage(ChatRole.Assistant, text));
+        return new ChatResponse(new ChatMessage(ChatRole.Assistant, text))
+        {
+            Usage = DefaultUsage,
+        };
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>

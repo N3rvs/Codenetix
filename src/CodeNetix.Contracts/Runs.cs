@@ -198,7 +198,8 @@ public sealed record RunSummary(
     Guid EventId,
     string ObjectKey,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    RunCostSummary? Cost = null);
 
 /// <summary>Consultas de lectura de Ejecuciones (implementadas por Pipeline).</summary>
 public interface IRunReader

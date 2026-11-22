@@ -52,6 +52,7 @@ public sealed partial class LlmReverseProxy : IDisposable
 
     private readonly ISandboxGateway _gateway;
     private readonly IRunEventSink _eventSink;
+    private readonly IBudgetLedger? _budgetLedger;
     private readonly IOptionsMonitor<SandboxOptions> _options;
     private readonly IHttpForwarder _forwarder;
     private readonly ILogger<LlmReverseProxy> _logger;
@@ -63,10 +64,12 @@ public sealed partial class LlmReverseProxy : IDisposable
         IOptionsMonitor<SandboxOptions> options,
         IHttpForwarder forwarder,
         ILogger<LlmReverseProxy> logger,
+        IBudgetLedger? budgetLedger = null,
         HttpMessageHandler? transportHandler = null)
     {
         _gateway = gateway;
         _eventSink = eventSink;
+        _budgetLedger = budgetLedger;
         _options = options;
         _forwarder = forwarder;
         _logger = logger;
@@ -197,15 +200,25 @@ public sealed partial class LlmReverseProxy : IDisposable
         }
 
         tracker.Complete();
-        if (tracker.TryGetUsage(coder.Model, out var model, out var inputTokens, out var outputTokens))
+        if (tracker.TryGetUsage(coder.Model, out var model, out var inputTokens, out var outputTokens)
+            && (inputTokens > 0 || outputTokens > 0))
         {
             try
             {
-                await _eventSink.AppendAsync(
-                    session.RunId,
-                    null,
-                    new TokensConsumed(CoderRole, coder.Provider, model, inputTokens, outputTokens),
-                    CancellationToken.None).ConfigureAwait(false);
+                if (_budgetLedger is not null)
+                {
+                    await _budgetLedger.ChargeAsync(
+                        new BudgetChargeRequest(session.RunId, null, CoderRole, coder.Provider, model, inputTokens, outputTokens),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+                else
+                {
+                    await _eventSink.AppendAsync(
+                        session.RunId,
+                        null,
+                        new TokensConsumed(CoderRole, coder.Provider, model, inputTokens, outputTokens),
+                        CancellationToken.None).ConfigureAwait(false);
+                }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

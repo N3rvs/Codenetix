@@ -1,6 +1,7 @@
 import type {
   ReviewerKind,
   RiskClass,
+  RunCostSummary,
   RunEvent,
   RunEventRiskClassified,
   RunState,
@@ -157,23 +158,68 @@ export function aggregateTokenUsage(events: readonly RunEvent[]): TokenUsageSumm
   }
 }
 
+function formatUsdAmount(amount: number): string {
+  if (amount < 1) {
+    return `$${amount.toFixed(4)} USD`
+  }
+
+  return `$${amount.toFixed(2)} USD`
+}
+
 /**
- * Formatea un coste en USD cuando existe; devuelve 'No disponible' si es null, undefined, NaN o negativo.
+ * Formatea el coste de una Ejecución a partir de RunCostSummary (o un importe numérico en USD):
+ * - Estimable -> "$0.0123 USD" (4 decimales si < 1, 2 decimales si >= 1)
+ * - Con modelos sin precio conocido -> "No estimable"
+ * - Sin cargos, null, undefined, NaN o negativo -> "No disponible"
  */
-export function formatCostDisplay(costUsd?: number | null): string {
-  if (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) {
+export function formatCostDisplay(cost?: RunCostSummary | number | null): string {
+  if (cost == null) {
     return 'No disponible'
   }
 
-  if (costUsd === 0) {
-    return '$0.00'
+  if (typeof cost === 'number') {
+    if (!Number.isFinite(cost) || cost < 0) {
+      return 'No disponible'
+    }
+    return formatUsdAmount(cost)
   }
 
-  if (costUsd < 0.01) {
-    return `$${costUsd.toFixed(4)}`
+  if (
+    cost.isEstimable &&
+    typeof cost.estimatedCostUsd === 'number' &&
+    Number.isFinite(cost.estimatedCostUsd) &&
+    cost.estimatedCostUsd >= 0
+  ) {
+    return formatUsdAmount(cost.estimatedCostUsd)
   }
 
-  return `$${costUsd.toFixed(2)}`
+  if (cost.hasUnpricedModels) {
+    return 'No estimable'
+  }
+
+  return 'No disponible'
+}
+
+/**
+ * Texto auxiliar descriptivo para la tarjeta de coste en el detalle del historial.
+ */
+export function formatCostSubtext(cost?: RunCostSummary | null): string {
+  if (!cost) {
+    return 'Sin coste registrado'
+  }
+
+  if (cost.isEstimable) {
+    if (typeof cost.budgetLimitUsd === 'number' && Number.isFinite(cost.budgetLimitUsd)) {
+      return `Límite: $${cost.budgetLimitUsd.toFixed(2)} USD`
+    }
+    return 'Calculado según tarifa del modelo'
+  }
+
+  if (cost.hasUnpricedModels) {
+    return 'Modelo sin precio conocido'
+  }
+
+  return 'Sin coste registrado'
 }
 
 /**

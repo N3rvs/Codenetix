@@ -13,6 +13,7 @@ import {
   extractLatestRiskClassification,
   filterHistoryRuns,
   formatCostDisplay,
+  formatCostSubtext,
   formatDateTime,
   formatDuration,
   groupVerdictsByRound,
@@ -76,8 +77,8 @@ export function RunHistoryDetail({
     [detail.events],
   )
   const durationLabel = formatDuration(detail.createdAt, detail.updatedAt)
-  // El libro de presupuesto (coste en USD) se introducirá en la Épica 5; por ahora no inventamos costes.
-  const costDisplay = formatCostDisplay(null)
+  const costDisplay = formatCostDisplay(detail.cost)
+  const costSubtext = formatCostSubtext(detail.cost)
   const cancellable = isRunCancellable(detail.state)
   const cancelTitle = cancellable
     ? 'Cancelar esta Ejecución sin abrir un PR'
@@ -152,7 +153,7 @@ export function RunHistoryDetail({
         <div className="history-metric-card">
           <span className="history-metric-label">Coste estimado</span>
           <strong className="history-metric-value history-metric-value--sm">{costDisplay}</strong>
-          <span className="history-metric-sub">Sin coste registrado</span>
+          <span className="history-metric-sub">{costSubtext}</span>
         </div>
       </section>
 
@@ -643,6 +644,9 @@ export function RunHistoryView({
                 ) : null}
                 <div className="run-meta history-item-footer">
                   <span>{formatDuration(run.createdAt, run.updatedAt)}</span>
+                  {run.cost && (run.cost.isEstimable || run.cost.hasUnpricedModels) ? (
+                    <span>{formatCostDisplay(run.cost)}</span>
+                  ) : null}
                   <span>{formatDateTime(run.createdAt)}</span>
                 </div>
               </button>

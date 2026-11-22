@@ -33,6 +33,7 @@ import {
 import { LiveTerminal } from './components/LiveTerminal'
 import { LaunchWorkModal } from './components/LaunchWorkModal'
 import { RunHistoryView } from './components/RunHistoryView'
+import { formatCostDisplay } from './history/runMetrics'
 import { selectDefaultNodeId, type TerminalScopeMode } from './terminal/stageOutput'
 
 const exampleCommand = 'docker exec codenetix codenetix fix <url-de-issue>'
@@ -249,6 +250,56 @@ function LivePanel({
   selectedRunIdRef.current = selectedRunId
   const runsAbortRef = useRef<AbortController | null>(null)
   const historyAbortRef = useRef<AbortController | null>(null)
+  const costRefreshAbortRef = useRef<AbortController | null>(null)
+  const costRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const cancelPendingCostRefresh = useCallback(() => {
+    if (costRefreshTimerRef.current !== null) {
+      clearTimeout(costRefreshTimerRef.current)
+      costRefreshTimerRef.current = null
+    }
+    costRefreshAbortRef.current?.abort()
+    costRefreshAbortRef.current = null
+  }, [])
+
+  const scheduleCostRefresh = useCallback(
+    (runId: string) => {
+      if (costRefreshTimerRef.current !== null) {
+        clearTimeout(costRefreshTimerRef.current)
+      }
+      costRefreshTimerRef.current = setTimeout(() => {
+        costRefreshTimerRef.current = null
+        costRefreshAbortRef.current?.abort()
+        const controller = new AbortController()
+        costRefreshAbortRef.current = controller
+
+        void fetchRunDetail(token, runId, controller.signal)
+          .then((detail) => {
+            if (controller.signal.aborted || selectedRunIdRef.current !== runId) {
+              return
+            }
+            setRuns((prev) =>
+              prev.map((r) => (r.runId === runId ? { ...r, cost: detail.cost ?? null } : r)),
+            )
+          })
+          .catch((err: unknown) => {
+            if (controller.signal.aborted) {
+              return
+            }
+            if (err instanceof UnauthorizedError) {
+              onLogout(err.message)
+            }
+          })
+      }, 300)
+    },
+    [token, onLogout],
+  )
+
+  useEffect(() => {
+    return () => {
+      cancelPendingCostRefresh()
+    }
+  }, [cancelPendingCostRefresh])
 
   const syncRunStateFromEvents = useCallback((runId: string, incomingEvents: readonly RunEvent[]) => {
     let lastChange: Extract<RunEvent, { type: 'StateChanged' }> | null = null
@@ -308,6 +359,7 @@ function LivePanel({
             objectKey: detail.objectKey,
             createdAt: detail.createdAt,
             updatedAt: detail.updatedAt,
+            cost: detail.cost ?? null,
           }
           list = [summary, ...list]
         } catch (detailErr) {
@@ -458,6 +510,9 @@ function LivePanel({
           return merged
         })
         syncRunStateFromEvents(runId, fetched)
+        if (fetched.some((ev) => ev.type === 'TokensConsumed')) {
+          scheduleCostRefresh(runId)
+        }
       } catch (err) {
         if (signal?.aborted || selectedRunIdRef.current !== runId) {
           return
@@ -469,7 +524,7 @@ function LivePanel({
         }
       }
     },
-    [token, onLogout, syncRunStateFromEvents],
+    [token, onLogout, syncRunStateFromEvents, scheduleCostRefresh],
   )
 
   // Carga inicial de eventos al cambiar de Ejecución seleccionada.
@@ -483,10 +538,11 @@ function LivePanel({
     }
     const controller = new AbortController()
     void catchUpEvents(selectedRunId, 0, controller.signal)
-    return () => {
+      return () => {
       controller.abort()
+      cancelPendingCostRefresh()
     }
-  }, [selectedRunId, catchUpEvents])
+  }, [selectedRunId, catchUpEvents, cancelPendingCostRefresh])
 
   // Conexión SignalR a /hubs/runs con reconexión automática y reanudación por afterSeq.
   useEffect(() => {
@@ -520,6 +576,10 @@ function LivePanel({
       // Si se detecta un hueco respecto al último seq contiguo, recuperar eventos perdidos vía HTTP.
       if (incoming.seq > previousContiguous + 1) {
         void catchUpEvents(selectedRunId, previousContiguous)
+      }
+
+      if (incoming.type === 'TokensConsumed') {
+        scheduleCostRefresh(selectedRunId)
       }
     })
 
@@ -594,7 +654,7 @@ function LivePanel({
         void connection.stop().catch(() => undefined)
       }
     }
-  }, [activeTab, token, selectedRunId, reconnectAttempt, catchUpEvents, syncRunStateFromEvents, onLogout])
+  }, [activeTab, token, selectedRunId, reconnectAttempt, catchUpEvents, syncRunStateFromEvents, scheduleCostRefresh, onLogout])
 
   const selectedRun = useMemo(
     () => runs.find((r) => r.runId === selectedRunId) ?? null,
@@ -852,6 +912,7 @@ function LivePanel({
                   </h1>
                   <div className="run-header-sub">
                     Estado: <strong>{STATE_LABELS[liveRunInfo.state]}</strong>
+                    {' · '}Coste: <strong>{formatCostDisplay(selectedRun.cost)}</strong>
                     {liveRunInfo.failureReason ? ` · Motivo: ${liveRunInfo.failureReason}` : ''}
                     {liveRunInfo.failureDetail ? ` — ${liveRunInfo.failureDetail}` : ''}
                   </div>

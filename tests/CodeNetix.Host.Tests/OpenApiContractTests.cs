@@ -107,7 +107,8 @@ public sealed class OpenApiContractTests : IDisposable
             Guid.Parse("33333333-3333-3333-3333-333333333333"),
             "github:owner/repo#42",
             new DateTimeOffset(2026, 11, 21, 12, 0, 0, TimeSpan.Zero),
-            new DateTimeOffset(2026, 11, 21, 12, 5, 0, TimeSpan.Zero));
+            new DateTimeOffset(2026, 11, 21, 12, 5, 0, TimeSpan.Zero),
+            new RunCostSummary(0.0145m, IsEstimable: true, HasUnpricedModels: false, 2000, 500, BudgetLimitUsd: 5.0m));
         var serializedSummary = JsonSerializer.SerializeToNode(sampleSummary, WebJson)?.AsObject()
             ?? throw new InvalidOperationException("No se pudo serializar RunSummary.");
         ValidateObjectAgainstSchema(serializedSummary, runSummarySchema, schemas, nameof(RunSummary));
@@ -174,12 +175,13 @@ public sealed class OpenApiContractTests : IDisposable
                 new TokensConsumed("analyst", "anthropic", "claude-sonnet-4-5", 1000, 300) with { RunId = detailRunId, Seq = 1, StageId = detailStageId, At = detailAt },
                 new RiskClassified(RiskClass.Minor, 12, []) with { RunId = detailRunId, Seq = 2, StageId = detailStageId, At = detailAt.AddMinutes(2) },
                 new PullRequestOpened(7, "https://github.com/owner/repo/pull/7", "codenetix/11111111-1111-1111-1111-111111111111", "abcdef0123456789") with { RunId = detailRunId, Seq = 3, StageId = detailStageId, At = detailAt.AddMinutes(3) },
-            ]);
+            ],
+            new RunCostSummary(0.0075m, IsEstimable: true, HasUnpricedModels: false, 1000, 300, BudgetLimitUsd: 2.0m));
         var serializedRunResponse = JsonSerializer.SerializeToNode(sampleRunResponse, WebJson)?.AsObject()
             ?? throw new InvalidOperationException("No se pudo serializar RunResponse.");
         ValidateObjectAgainstSchema(serializedRunResponse, runResponseSchema, schemas, nameof(RunResponse));
 
-        // Validar también un RunResponse fallido con campos opcionales en null y listas vacías.
+        // Validar también un RunResponse fallido con campos opcionales en null, listas vacías y RunCostSummary con EstimatedCostUsd y BudgetLimitUsd en null.
         var failedRunResponse = new RunResponse(
             detailRunId,
             "11111111",
@@ -194,7 +196,8 @@ public sealed class OpenApiContractTests : IDisposable
             null,
             [],
             null,
-            []);
+            [],
+            new RunCostSummary(null, IsEstimable: false, HasUnpricedModels: true, 800, 200, BudgetLimitUsd: null));
         var serializedFailedRunResponse = JsonSerializer.SerializeToNode(failedRunResponse, WebJson)?.AsObject()
             ?? throw new InvalidOperationException("No se pudo serializar RunResponse fallido.");
         ValidateObjectAgainstSchema(serializedFailedRunResponse, runResponseSchema, schemas, $"{nameof(RunResponse)}(Failed)");

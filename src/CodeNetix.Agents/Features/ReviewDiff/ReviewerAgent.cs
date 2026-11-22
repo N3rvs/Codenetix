@@ -18,7 +18,8 @@ internal sealed partial class ReviewerAgent(
     SchemaRetryDecorator retrier,
     IRunEventSink events,
     IOptions<AgentsOptions> options,
-    ILogger<ReviewerAgent> logger) : IReviewerAgent
+    ILogger<ReviewerAgent> logger,
+    IBudgetLedger? budgetLedger = null) : IReviewerAgent
 {
     public async Task<ReviewResult> ReviewAsync(ReviewInput input, CancellationToken cancellationToken)
     {
@@ -49,7 +50,9 @@ internal sealed partial class ReviewerAgent(
         Microsoft.Extensions.AI.IChatClient client;
         try
         {
-            client = clientFactory.Create(endpoint, model);
+            var rawClient = clientFactory.Create(endpoint, model);
+            var role = $"Reviewer:{input.ReviewerKind.ToString().ToLowerInvariant()}";
+            client = new BudgetTrackingChatClient(rawClient, budgetLedger, input.RunId, input.StageId, role, endpoint.Provider, model, logger);
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or UriFormatException)
         {

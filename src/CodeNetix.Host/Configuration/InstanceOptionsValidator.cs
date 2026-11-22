@@ -124,6 +124,34 @@ internal static class InstanceOptionsValidator
             AddDistinct(reasons, AgentEndpointResolver.ResolveReviewer(options, kind).Reasons);
         }
 
+        if (options.Pricing is { Count: > 0 })
+        {
+            foreach (var (modelName, pricing) in options.Pricing)
+            {
+                if (string.IsNullOrWhiteSpace(modelName))
+                {
+                    reasons.Add("CODENETIX__Pricing contiene una entrada con nombre de modelo vacío.");
+                    continue;
+                }
+
+                if (pricing is null)
+                {
+                    reasons.Add($"CODENETIX__Pricing__{modelName} debe definir InputPerMillionUsd y OutputPerMillionUsd mayores o iguales que 0.");
+                    continue;
+                }
+
+                if (!pricing.InputPerMillionUsd.HasValue || pricing.InputPerMillionUsd.Value < 0)
+                {
+                    reasons.Add($"CODENETIX__Pricing__{modelName}__InputPerMillionUsd es obligatorio y debe ser mayor o igual que 0.");
+                }
+
+                if (!pricing.OutputPerMillionUsd.HasValue || pricing.OutputPerMillionUsd.Value < 0)
+                {
+                    reasons.Add($"CODENETIX__Pricing__{modelName}__OutputPerMillionUsd es obligatorio y debe ser mayor o igual que 0.");
+                }
+            }
+        }
+
         return reasons;
     }
 

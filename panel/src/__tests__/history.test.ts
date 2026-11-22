@@ -3,12 +3,13 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { fetchRunDetail, isSafeHttpUrl, UnauthorizedError } from '../api/client'
 import type { RunEvent, RunResponse, RunSummary, RunVerdict } from '../api/generated'
-import { RunHistoryDetail } from '../components/RunHistoryView'
+import { RunHistoryDetail, RunHistoryView } from '../components/RunHistoryView'
 import {
   aggregateTokenUsage,
   extractLatestRiskClassification,
   filterHistoryRuns,
   formatCostDisplay,
+  formatCostSubtext,
   formatDateTime,
   formatDuration,
   groupVerdictsByRound,
@@ -174,10 +175,56 @@ describe('aggregateTokenUsage', () => {
 })
 
 describe('formatCostDisplay', () => {
-  it('formatea costes válidos y devuelve No disponible para null, undefined, NaN o negativos', () => {
-    expect(formatCostDisplay(0)).toBe('$0.00')
-    expect(formatCostDisplay(0.0042)).toBe('$0.0042')
-    expect(formatCostDisplay(1.25)).toBe('$1.25')
+  it('formatea RunCostSummary estimable, no estimable y sin cargos', () => {
+    expect(
+      formatCostDisplay({
+        estimatedCostUsd: 0.0123,
+        isEstimable: true,
+        hasUnpricedModels: false,
+        totalInputTokens: 1000,
+        totalOutputTokens: 500,
+        budgetLimitUsd: 5,
+      }),
+    ).toBe('$0.0123 USD')
+
+    expect(
+      formatCostDisplay({
+        estimatedCostUsd: 2.5,
+        isEstimable: true,
+        hasUnpricedModels: false,
+        totalInputTokens: 500000,
+        totalOutputTokens: 100000,
+        budgetLimitUsd: null,
+      }),
+    ).toBe('$2.50 USD')
+
+    expect(
+      formatCostDisplay({
+        estimatedCostUsd: null,
+        isEstimable: false,
+        hasUnpricedModels: true,
+        totalInputTokens: 1500,
+        totalOutputTokens: 400,
+        budgetLimitUsd: null,
+      }),
+    ).toBe('No estimable')
+
+    expect(
+      formatCostDisplay({
+        estimatedCostUsd: null,
+        isEstimable: false,
+        hasUnpricedModels: false,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        budgetLimitUsd: null,
+      }),
+    ).toBe('No disponible')
+  })
+
+  it('mantiene compatibilidad con importes numéricos y devuelve No disponible para null, undefined, NaN o negativos', () => {
+    expect(formatCostDisplay(0)).toBe('$0.0000 USD')
+    expect(formatCostDisplay(0.0042)).toBe('$0.0042 USD')
+    expect(formatCostDisplay(1.25)).toBe('$1.25 USD')
     expect(formatCostDisplay(null)).toBe('No disponible')
     expect(formatCostDisplay(undefined)).toBe('No disponible')
     expect(formatCostDisplay(Number.NaN)).toBe('No disponible')
@@ -496,5 +543,158 @@ describe('RunHistoryDetail (renderizado)', () => {
     expect(html).toContain('No hay Veredictos registrados para esta Ejecución.')
     expect(html).toContain('No hay informe de pruebas registrado para esta Ejecución.')
     expect(html).not.toContain('Pull Request #')
+  })
+
+  it('renderiza el coste estimado en USD y el estado No estimable cuando hay modelos sin precio', () => {
+    const withEstimableCost: RunResponse = {
+      ...makeFullDetail('https://github.com/acme/web/pull/77'),
+      cost: {
+        estimatedCostUsd: 0.0145,
+        isEstimable: true,
+        hasUnpricedModels: false,
+        totalInputTokens: 1000,
+        totalOutputTokens: 250,
+        budgetLimitUsd: 5,
+      },
+    }
+
+    const estimableHtml = renderToStaticMarkup(
+      createElement(RunHistoryDetail, {
+        detail: withEstimableCost,
+        onOpenLive: () => undefined,
+      }),
+    )
+    expect(estimableHtml).toContain('$0.0145 USD')
+    expect(estimableHtml).toContain('Límite: $5.00 USD')
+
+    const withUnpricedModel: RunResponse = {
+      ...makeFullDetail('https://github.com/acme/web/pull/77'),
+      cost: {
+        estimatedCostUsd: null,
+        isEstimable: false,
+        hasUnpricedModels: true,
+        totalInputTokens: 1000,
+        totalOutputTokens: 250,
+        budgetLimitUsd: null,
+      },
+    }
+
+    const unpricedHtml = renderToStaticMarkup(
+      createElement(RunHistoryDetail, {
+        detail: withUnpricedModel,
+        onOpenLive: () => undefined,
+      }),
+    )
+    expect(unpricedHtml).toContain('No estimable')
+    expect(unpricedHtml).toContain('Modelo sin precio conocido')
+  })
+})
+
+describe('formatCostSubtext', () => {
+  it('cubre todas las ramas: null/undefined, estimable con y sin límite, no estimable y sin cargos', () => {
+    expect(formatCostSubtext(null)).toBe('Sin coste registrado')
+    expect(formatCostSubtext(undefined)).toBe('Sin coste registrado')
+    expect(
+      formatCostSubtext({
+        estimatedCostUsd: 0.05,
+        isEstimable: true,
+        hasUnpricedModels: false,
+        totalInputTokens: 1000,
+        totalOutputTokens: 200,
+        budgetLimitUsd: 10,
+      }),
+    ).toBe('Límite: $10.00 USD')
+    expect(
+      formatCostSubtext({
+        estimatedCostUsd: 0.05,
+        isEstimable: true,
+        hasUnpricedModels: false,
+        totalInputTokens: 1000,
+        totalOutputTokens: 200,
+        budgetLimitUsd: null,
+      }),
+    ).toBe('Calculado según tarifa del modelo')
+    expect(
+      formatCostSubtext({
+        estimatedCostUsd: null,
+        isEstimable: false,
+        hasUnpricedModels: true,
+        totalInputTokens: 1000,
+        totalOutputTokens: 200,
+        budgetLimitUsd: null,
+      }),
+    ).toBe('Modelo sin precio conocido')
+    expect(
+      formatCostSubtext({
+        estimatedCostUsd: null,
+        isEstimable: false,
+        hasUnpricedModels: false,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        budgetLimitUsd: null,
+      }),
+    ).toBe('Sin coste registrado')
+  })
+})
+
+describe('RunHistoryView (listado con costes)', () => {
+  it('renderiza tarjetas de historial con coste estimable, No estimable y sin coste', () => {
+    const runs: RunSummary[] = [
+      makeSummary({
+        runId: 'r-estimable',
+        shortId: '1111aaaa',
+        cost: {
+          estimatedCostUsd: 0.0234,
+          isEstimable: true,
+          hasUnpricedModels: false,
+          totalInputTokens: 2000,
+          totalOutputTokens: 500,
+          budgetLimitUsd: 5,
+        },
+      }),
+      makeSummary({
+        runId: 'r-unpriced',
+        shortId: '2222bbbb',
+        cost: {
+          estimatedCostUsd: null,
+          isEstimable: false,
+          hasUnpricedModels: true,
+          totalInputTokens: 1200,
+          totalOutputTokens: 300,
+          budgetLimitUsd: null,
+        },
+      }),
+      makeSummary({
+        runId: 'r-empty',
+        shortId: '3333cccc',
+        cost: {
+          estimatedCostUsd: null,
+          isEstimable: false,
+          hasUnpricedModels: false,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          budgetLimitUsd: null,
+        },
+      }),
+    ]
+
+    const html = renderToStaticMarkup(
+      createElement(RunHistoryView, {
+        token: 'tok',
+        runs,
+        loadingRuns: false,
+        runsError: null,
+        onRefreshRuns: () => undefined,
+        onOpenLive: () => undefined,
+        onLogout: () => undefined,
+      }),
+    )
+
+    expect(html).toContain('$0.0234 USD')
+    expect(html).toContain('No estimable')
+    expect(html).toContain('#1111aaaa')
+    expect(html).toContain('#2222bbbb')
+    expect(html).toContain('#3333cccc')
+    expect(html).not.toContain('No disponible')
   })
 })
