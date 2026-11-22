@@ -26,6 +26,8 @@ import {
   STATE_LABELS,
   type PipelineFlowNode,
 } from './graph/buildPipelineGraph'
+import { LiveTerminal } from './components/LiveTerminal'
+import { selectDefaultNodeId, type TerminalScopeMode } from './terminal/stageOutput'
 
 const exampleCommand = 'docker exec codenetix codenetix fix <url-de-issue>'
 const retryDelayMs = 2000
@@ -69,7 +71,10 @@ function computeLastContiguousSeq(sortedEvents: readonly RunEvent[]): number {
 
 function StageNode({ data }: NodeProps<PipelineFlowNode>) {
   return (
-    <div className={`stage-node stage-node--${data.status}`}>
+    <div
+      className={`stage-node stage-node--${data.status}${data.selected ? ' stage-node--selected' : ''}`}
+      data-selected={data.selected ? 'true' : 'false'}
+    >
       <Handle type="target" position={Position.Left} style={{ background: '#475569' }} />
       <div className="stage-node-head">
         <span className="stage-node-title">{data.label}</span>
@@ -225,6 +230,9 @@ function LivePanel({
 }) {
   const [runs, setRuns] = useState<RunSummary[]>(initialRuns ?? [])
   const [selectedRunId, setSelectedRunId] = useState<string | null>(initialRuns?.[0]?.runId ?? null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [hasManualNodeSelection, setHasManualNodeSelection] = useState(false)
+  const [terminalScopeMode, setTerminalScopeMode] = useState<TerminalScopeMode>('node')
   const [events, setEvents] = useState<RunEvent[]>([])
   const [hubStatus, setHubStatus] = useState<HubStatus>('connecting')
   const [reconnectAttempt, setReconnectAttempt] = useState(0)
@@ -324,6 +332,8 @@ function LivePanel({
   // Carga inicial de eventos al cambiar de Ejecución seleccionada.
   useEffect(() => {
     setEvents([])
+    setSelectedNodeId(null)
+    setHasManualNodeSelection(false)
     lastContiguousSeqRef.current = 0
     if (!selectedRunId) {
       return
@@ -448,19 +458,63 @@ function LivePanel({
     [runs, selectedRunId],
   )
 
-  const liveRunInfo = useMemo(
-    () => (selectedRun ? deriveCurrentState(selectedRun, events) : null),
-    [selectedRun, events],
+  const runEvents = useMemo(
+    () => (selectedRunId ? events.filter((e) => e.runId === selectedRunId) : []),
+    [events, selectedRunId],
   )
+
+  const liveRunInfo = useMemo(
+    () => (selectedRun ? deriveCurrentState(selectedRun, runEvents) : null),
+    [selectedRun, runEvents],
+  )
+
+  const baseGraph = useMemo(
+    () => (selectedRun ? buildPipelineGraph(selectedRun, runEvents) : { nodes: [], edges: [] }),
+    [selectedRun, runEvents],
+  )
+
+  const effectiveSelectedNodeId = useMemo(() => {
+    if (
+      hasManualNodeSelection &&
+      selectedNodeId &&
+      baseGraph.nodes.some((n) => n.id === selectedNodeId)
+    ) {
+      return selectedNodeId
+    }
+    return selectDefaultNodeId(baseGraph.nodes, runEvents)
+  }, [hasManualNodeSelection, selectedNodeId, baseGraph.nodes, runEvents])
 
   const graph = useMemo(
-    () => (selectedRun ? buildPipelineGraph(selectedRun, events) : { nodes: [], edges: [] }),
-    [selectedRun, events],
+    () => ({
+      edges: baseGraph.edges,
+      nodes: baseGraph.nodes.map((node) => {
+        const isSelected = effectiveSelectedNodeId !== null && node.id === effectiveSelectedNodeId
+        return {
+          ...node,
+          selected: isSelected,
+          data: {
+            ...node.data,
+            selected: isSelected,
+          },
+        }
+      }),
+    }),
+    [baseGraph, effectiveSelectedNodeId],
   )
 
+  const selectedNodeLabel = useMemo(() => {
+    const match = graph.nodes.find((n) => n.id === effectiveSelectedNodeId)
+    return match?.data.label ?? 'Sin nodo'
+  }, [graph.nodes, effectiveSelectedNodeId])
+
+  const handleNodeClick = useCallback((_event: React.MouseEvent, node: PipelineFlowNode) => {
+    setSelectedNodeId(node.id)
+    setHasManualNodeSelection(true)
+  }, [])
+
   const prOpenedEvent = useMemo(
-    () => events.find((e) => e.type === 'PullRequestOpened') ?? null,
-    [events],
+    () => runEvents.find((e) => e.type === 'PullRequestOpened') ?? null,
+    [runEvents],
   )
 
   const hubPill =
@@ -515,7 +569,15 @@ function LivePanel({
                   key={run.runId}
                   type="button"
                   className={`run-item${run.runId === selectedRunId ? ' selected' : ''}`}
-                  onClick={() => setSelectedRunId(run.runId)}
+                  onClick={() => {
+                    if (run.runId !== selectedRunId) {
+                      setEvents([])
+                      setSelectedNodeId(null)
+                      setHasManualNodeSelection(false)
+                      lastContiguousSeqRef.current = 0
+                      setSelectedRunId(run.runId)
+                    }
+                  }}
                 >
                   <div className="run-item-top">
                     <span className="run-short-id">#{run.shortId}</span>
@@ -570,11 +632,12 @@ function LivePanel({
                   nodes={graph.nodes}
                   edges={graph.edges}
                   nodeTypes={nodeTypes}
+                  onNodeClick={handleNodeClick}
                   fitView
                   fitViewOptions={{ padding: 0.2 }}
                   nodesDraggable={false}
                   nodesConnectable={false}
-                  elementsSelectable={false}
+                  elementsSelectable
                   proOptions={{ hideAttribution: true }}
                 >
                   <Background color="#1e293b" gap={20} />
@@ -582,22 +645,33 @@ function LivePanel({
                 </ReactFlow>
               </div>
 
-              <section className="events-panel">
-                <div className="events-panel-header">
-                  <span>Eventos en vivo ({events.length})</span>
-                  <span>Último seq: {events.length > 0 ? events[events.length - 1].seq : 0}</span>
-                </div>
-                <div className="events-list">
-                  {[...events].reverse().map((ev) => (
-                    <div key={ev.seq} className="event-row">
-                      <span className="event-seq">#{ev.seq}</span>
-                      <span className="event-type">{ev.type}</span>
-                      <span className="event-detail">{summarizeEvent(ev)}</span>
-                      <span className="event-time">{formatTime(ev.at)}</span>
-                    </div>
-                  ))}
-                </div>
-              </section>
+              <div className="inspector-panel">
+                <LiveTerminal
+                  runId={selectedRun.runId}
+                  selectedNodeId={effectiveSelectedNodeId}
+                  selectedNodeLabel={selectedNodeLabel}
+                  events={runEvents}
+                  scopeMode={terminalScopeMode}
+                  onScopeModeChange={setTerminalScopeMode}
+                />
+
+                <section className="events-panel">
+                  <div className="events-panel-header">
+                    <span>Eventos en vivo ({runEvents.length})</span>
+                    <span>Último seq: {runEvents.length > 0 ? runEvents[runEvents.length - 1].seq : 0}</span>
+                  </div>
+                  <div className="events-list">
+                    {[...runEvents].reverse().map((ev) => (
+                      <div key={ev.seq} className="event-row">
+                        <span className="event-seq">#{ev.seq}</span>
+                        <span className="event-type">{ev.type}</span>
+                        <span className="event-detail">{summarizeEvent(ev)}</span>
+                        <span className="event-time">{formatTime(ev.at)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
             </>
           ) : (
             <div className="empty-workspace">

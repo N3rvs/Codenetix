@@ -17,6 +17,7 @@ export interface PipelineStageNodeData extends Record<string, unknown> {
   status: StageVisualStatus
   subtitle?: string
   badge?: string
+  selected?: boolean
 }
 
 export type PipelineFlowNode = Node<PipelineStageNodeData, 'stage'>
@@ -93,6 +94,7 @@ function stageOrderIndex(state: RunState): number {
 export function buildPipelineGraph(
   run: RunSummary,
   events: readonly RunEvent[],
+  selectedNodeId: string | null = null,
 ): { nodes: PipelineFlowNode[]; edges: Edge[] } {
   const { state: currentState, failureReason } = deriveCurrentState(run, events)
 
@@ -399,5 +401,17 @@ export function buildPipelineGraph(
     animated: decidingStatus === 'active',
   })
 
-  return { nodes, edges }
+  const nodesWithSelection: PipelineFlowNode[] = nodes.map((node) => {
+    const isSelected = selectedNodeId !== null && node.id === selectedNodeId
+    return {
+      ...node,
+      selected: isSelected,
+      data: {
+        ...node.data,
+        selected: isSelected,
+      },
+    }
+  })
+
+  return { nodes: nodesWithSelection, edges }
 }
