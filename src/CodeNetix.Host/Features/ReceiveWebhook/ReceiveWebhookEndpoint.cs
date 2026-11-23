@@ -57,23 +57,37 @@ internal sealed class WebhookPortGuardMiddleware(RequestDelegate next, IOptionsM
 }
 
 /// <summary>
-/// <c>/webhooks/{**rest}</c> en <c>:5001</c>, provisional hasta la Épica 7 (firmas y Fuentes reales):
-/// <c>Starting</c> o <c>Diagnostic</c> → 503 (AD-18); <c>Ready</c> → 404 "Fuente de webhook no disponible todavía".
+/// Webhooks en <c>:5001</c> (AD-17, FR-7), sin <c>admin-token</c>: solo la firma autentica.
+/// <list type="bullet">
+/// <item><c>POST /webhooks/github</c>: <c>Starting</c>/<c>Diagnostic</c> → 503 (AD-18); sin
+/// <c>CODENETIX__GitHub__WebhookSecret</c> → 404 "no configurado"; cuerpo de más de 1 MiB → 413; firma no válida → 401 sin
+/// detalle; si no, lo que decida <see cref="IGitHubWebhookIngestion"/> (200 <c>pong</c>/<c>ignored</c>, 202
+/// <c>queued</c>/<c>duplicate</c>, 400, 415, 503 con la cola llena). Nunca llama a GitHub antes de responder.</item>
+/// <item>El resto de <c>/webhooks/{**rest}</c> (Sentry, 7.3), provisional: 503 si no está <c>Ready</c>; si no, 404
+/// "Fuente de webhook no disponible todavía".</item>
+/// </list>
 /// </summary>
 internal static class ReceiveWebhookEndpoint
 {
     public const string Prefix = "/webhooks";
     public const string Route = Prefix + "/{**rest}";
+    public const string GitHubRoute = Prefix + "/github";
     public const string SourceNotAvailableTitle = "Fuente de webhook no disponible todavía";
+    public const string GitHubNotConfiguredTitle = "Webhook de GitHub no configurado";
+    public const string InvalidSignatureTitle = "Firma no válida";
 
     public static IEndpointRouteBuilder MapReceiveWebhook(this IEndpointRouteBuilder endpoints)
     {
+        endpoints.Map(GitHubRoute, HandleGitHubAsync)
+            .WithName("ReceiveGitHubWebhook")
+            .ExcludeFromDescription();
+
         endpoints.Map(Route, (HttpContext context, InstanceHealth health) =>
             {
                 // Defensa en profundidad: la guarda de puerto ya filtra :5000.
                 if (!ListenPorts.IsWebhookPort(context))
                 {
-                    return Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Recurso no encontrado");
+                    return NotFound();
                 }
 
                 return health.Status == InstanceHealthStatus.Ready
@@ -81,13 +95,116 @@ internal static class ReceiveWebhookEndpoint
                         statusCode: StatusCodes.Status404NotFound,
                         title: SourceNotAvailableTitle,
                         detail: "La recepción de webhooks llegará en una versión posterior.")
-                    : Results.Problem(
-                        statusCode: StatusCodes.Status503ServiceUnavailable,
-                        title: "CodeNetix no está listo para recibir webhooks",
-                        detail: "La instancia está arrancando o en modo diagnóstico; consulta /api/health en :5000.");
+                    : NotReady();
             })
             .WithName("ReceiveWebhook");
 
         return endpoints;
     }
+
+    private static async Task<IResult> HandleGitHubAsync(HttpContext context, InstanceHealth health, CancellationToken cancellationToken)
+    {
+        if (!ListenPorts.IsWebhookPort(context))
+        {
+            return NotFound();
+        }
+
+        if (!HttpMethods.IsPost(context.Request.Method))
+        {
+            context.Response.Headers.Allow = HttpMethods.Post;
+            return Results.Problem(statusCode: StatusCodes.Status405MethodNotAllowed, title: "Método no permitido", detail: "Usa POST.");
+        }
+
+        if (health.Status != InstanceHealthStatus.Ready)
+        {
+            return NotReady();
+        }
+
+        // Se resuelve aquí (no como parámetro): fuera de serve no está registrado y equivale a desactivado.
+        var ingestion = context.RequestServices.GetService<IGitHubWebhookIngestion>();
+        if (ingestion is not { Enabled: true })
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: GitHubNotConfiguredTitle,
+                detail: "Define CODENETIX__GitHub__WebhookSecret para activar el webhook de GitHub.");
+        }
+
+        var body = await ReadBodyAsync(context.Request, ingestion.MaxBodyBytes, cancellationToken);
+        if (body is null)
+        {
+            return Results.Problem(
+                statusCode: StatusCodes.Status413PayloadTooLarge,
+                title: "Cuerpo demasiado grande",
+                detail: $"El webhook admite como mucho {ingestion.MaxBodyBytes} bytes.");
+        }
+
+        var headers = context.Request.Headers;
+
+        // Una sola cabecera de firma: repetida (o vacía) es una firma no válida, nunca "alguna de ellas".
+        var signatures = headers["X-Hub-Signature-256"];
+        var receipt = ingestion.Receive(new GitHubWebhookDelivery(
+            headers["X-GitHub-Event"].ToString(),
+            headers["X-GitHub-Delivery"].ToString(),
+            signatures.Count == 1 ? signatures[0] : null,
+            context.Request.ContentType,
+            body.Value));
+
+        return receipt.Outcome switch
+        {
+            GitHubWebhookOutcome.InvalidSignature => Results.Problem(statusCode: StatusCodes.Status401Unauthorized, title: InvalidSignatureTitle),
+            GitHubWebhookOutcome.UnsupportedContentType => Results.Problem(
+                statusCode: StatusCodes.Status415UnsupportedMediaType,
+                title: "Tipo de contenido no admitido",
+                detail: receipt.Reason),
+            GitHubWebhookOutcome.InvalidPayload => Results.Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Payload no válido",
+                detail: receipt.Reason),
+            GitHubWebhookOutcome.Pong => Results.Ok(new GitHubWebhookResponse("pong", null)),
+            GitHubWebhookOutcome.Ignored => Results.Ok(new GitHubWebhookResponse("ignored", receipt.Reason)),
+            GitHubWebhookOutcome.Queued => Results.Json(new GitHubWebhookResponse("queued", null), statusCode: StatusCodes.Status202Accepted),
+            GitHubWebhookOutcome.Duplicate => Results.Json(new GitHubWebhookResponse("duplicate", null), statusCode: StatusCodes.Status202Accepted),
+            GitHubWebhookOutcome.QueueFull => Results.Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "Cola de webhooks llena",
+                detail: receipt.Reason),
+            _ => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: GitHubNotConfiguredTitle),
+        };
+    }
+
+    /// <summary>Cuerpo crudo (la firma va sobre estos bytes); <c>null</c> si supera <paramref name="maxBytes"/>.</summary>
+    private static async Task<ReadOnlyMemory<byte>?> ReadBodyAsync(HttpRequest request, int maxBytes, CancellationToken cancellationToken)
+    {
+        if (request.ContentLength > maxBytes)
+        {
+            return null;
+        }
+
+        using var buffer = new MemoryStream();
+        var chunk = new byte[16 * 1024];
+        int read;
+        while ((read = await request.Body.ReadAsync(chunk, cancellationToken)) > 0)
+        {
+            if (buffer.Length + read > maxBytes)
+            {
+                return null;
+            }
+
+            buffer.Write(chunk, 0, read);
+        }
+
+        return buffer.ToArray();
+    }
+
+    private static IResult NotFound() => Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Recurso no encontrado");
+
+    private static IResult NotReady() => Results.Problem(
+        statusCode: StatusCodes.Status503ServiceUnavailable,
+        title: "CodeNetix no está listo para recibir webhooks",
+        detail: "La instancia está arrancando o en modo diagnóstico; consulta /api/health en :5000.");
 }
+
+/// <param name="Result"><c>pong</c>, <c>ignored</c>, <c>queued</c> o <c>duplicate</c>.</param>
+/// <param name="Reason">Por qué se ignora (visible en "Recent Deliveries" de GitHub).</param>
+internal sealed record GitHubWebhookResponse(string Result, string? Reason);

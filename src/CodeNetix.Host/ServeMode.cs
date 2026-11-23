@@ -44,6 +44,9 @@ internal static class ServeMode
         // Sondeo de issues etiquetadas (FR-6): solo en serve; sin repositorios no hace nada.
         builder.AddGitHubPolling();
 
+        // Webhook de GitHub (FR-7): solo en serve (:5001); sin CODENETIX__GitHub__WebhookSecret está desactivado.
+        builder.AddGitHubWebhooks();
+
         builder.Services.AddSingleton<IRunEventPublisher, RunsHubEventPublisher>();
         builder.Services.AddSignalR();
         builder.Services.AddOpenApi(options =>

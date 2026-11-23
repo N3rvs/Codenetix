@@ -163,7 +163,7 @@ de los repositorios que le indiques. Está **desactivado por defecto**: se activ
 | Variable | Por defecto |
 | --- | --- |
 | `CODENETIX__Polling__Repositories` | Vacío (sondeo desactivado). Lista `owner/repo` separada por comas, p. ej. `acme/api,acme/web` (o `__0`, `__1`…) |
-| `CODENETIX__Polling__Label` | `codenetix` |
+| `CODENETIX__Polling__Label` | `codenetix` (etiqueta de disparo de la instancia: la usan el sondeo y el webhook de GitHub) |
 | `CODENETIX__Polling__IntervalSeconds` | `300` (5 minutos; entre `60` y `86400`) |
 
 - Cada ciclo busca, en cada issue abierta con la etiqueta, quién la etiquetó por última vez. Solo se procesa si esa
@@ -176,6 +176,45 @@ de los repositorios que le indiques. Está **desactivado por defecto**: se activ
   nuevo es, para CodeNetix, otro repositorio. Quita antes la etiqueta de las que no quieras relanzar.
 - Usa peticiones condicionales (`ETag`) para gastar poco rate limit del token y, si GitHub lo agota, espera a que se
   renueve. En modo diagnóstico, y en `codenetix action`, no sondea.
+
+## Webhooks de GitHub
+
+Con un servidor accesible desde GitHub, `codenetix serve` procesa una issue en cuanto se etiqueta, sin esperar al
+sondeo. El webhook escucha en el puerto `:5001`, que solo sirve `/webhooks/*` (sin `admin-token`: lo autentica la
+firma); el Panel y la API siguen en `:5000`. Está **desactivado por defecto**: se activa al definir el secreto.
+
+| Variable | Por defecto |
+| --- | --- |
+| `CODENETIX__GitHub__WebhookSecret` | Vacío (webhook desactivado: `POST /webhooks/github` responde `404`). Al menos 16 caracteres |
+| `CODENETIX__GitHub__WebhookRepositories` | Vacío (cualquier repositorio que envíe un webhook firmado). Lista `owner/repo` separada por comas (o `__0`, `__1`…) |
+
+1. Publica el puerto de webhooks detrás de tu proxy TLS, p. ej. añadiendo `-p 127.0.0.1:5001:5001` al `docker run` y
+   `-e CODENETIX__GitHub__WebhookSecret=<secreto-largo-y-aleatorio>` (por ejemplo, `openssl rand -hex 32`).
+2. En GitHub, en el repositorio (o en la organización): *Settings → Webhooks → Add webhook*:
+   - **Payload URL:** `https://<tu-host>/webhooks/github`
+   - **Content type:** `application/json` (con `application/x-www-form-urlencoded` responde `415`)
+   - **Secret:** el mismo valor de `CODENETIX__GitHub__WebhookSecret`
+   - **Events:** *Let me select individual events* → **Issues**
+3. GitHub envía un `ping` al guardarlo: en *Recent Deliveries* debe verse `200` con `{"result":"pong"}`.
+
+Cómo se comporta:
+
+- Se verifica la firma `X-Hub-Signature-256` (HMAC SHA-256 del cuerpo); si falta o no coincide, `401` y no se procesa.
+  En modo diagnóstico responde `503`. Cuerpos de más de 1 MiB: `413`.
+- Solo dispara trabajo `issues`/`labeled` con la etiqueta de disparo (`CODENETIX__Polling__Label`, por defecto
+  `codenetix`) sobre una issue abierta. Lo demás responde `200` con `{"result":"ignored","reason":"…"}`, visible en
+  *Recent Deliveries*.
+- La respuesta (`202`, `{"result":"queued"}`) sale al instante; después CodeNetix busca el evento `labeled` en la API
+  de GitHub y solo procesa la issue si **quien puso la etiqueta** tiene permiso de escritura (si no, «ignorado: no
+  autorizado»).
+- Comparte la deduplicación con el sondeo: el mismo etiquetado, llegue por webhook, por sondeo o por los dos, crea un
+  único Evento. Reentregar una entrega (*Redeliver*) no duplica nada; para relanzar una issue, quita la etiqueta y
+  vuelve a ponerla.
+- Las entregas pendientes se guardan en memoria: si CodeNetix se reinicia antes de procesarlas, o GitHub no muestra el
+  evento `labeled` tras unos 40 s de reintentos, se descartan con un aviso en el log. Las recupera el sondeo (si el
+  repositorio está en `CODENETIX__Polling__Repositories`) o un *Redeliver* desde GitHub. El identificador
+  `X-GitHub-Delivery` aparece en los logs y en el Evento.
+- `codenetix action` no abre `:5001` ni recibe webhooks.
 
 ## Modo GitHub Action (`codenetix action`)
 

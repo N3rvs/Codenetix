@@ -224,7 +224,7 @@ internal sealed class GitHubActionEventIngestion(
         return row is null ? null : new ManualEventInfo(row.Id, row.Status, row.Actor, repository, row.IgnoredReason);
     }
 
-    private static bool TrySplitRepository(string? fullName, out string owner, out string repo)
+    internal static bool TrySplitRepository(string? fullName, out string owner, out string repo)
     {
         owner = string.Empty;
         repo = string.Empty;
@@ -251,11 +251,11 @@ internal sealed class GitHubActionEventIngestion(
         return string.IsNullOrEmpty(trimmed) || trimmed.Length > 20 || !trimmed.All(char.IsAsciiDigit) ? null : trimmed;
     }
 
-    private static string? GetString(JsonElement element, string name) =>
+    internal static string? GetString(JsonElement element, string name) =>
         element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
     /// <summary>Texto no confiable mostrado en un motivo: sin caracteres de control y como mucho <see cref="MaxShownLength"/>.</summary>
-    private static string Shown(string? value)
+    internal static string Shown(string? value)
     {
         if (string.IsNullOrEmpty(value))
         {

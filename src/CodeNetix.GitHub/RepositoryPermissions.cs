@@ -38,7 +38,7 @@ internal sealed class RepositoryPermissions(GitHubApiClient client) : IRepositor
 
         if (response.Status != HttpStatusCode.OK)
         {
-            return WriteAccess.Unavailable(GitHubApiClient.FailureReason(response));
+            return WriteAccess.Unavailable(GitHubApiClient.FailureReason(response)) with { RateLimited = response.RateLimited };
         }
 
         if (response.Body is not { ValueKind: JsonValueKind.Object } json

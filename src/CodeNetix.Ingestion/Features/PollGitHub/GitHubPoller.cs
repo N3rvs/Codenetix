@@ -1,9 +1,5 @@
-using System.Text.Json;
 using CodeNetix.Contracts;
-using CodeNetix.Ingestion.Data;
-using CodeNetix.Ingestion.Features.SubmitManualEvent;
-using Microsoft.Data.Sqlite;
-using Microsoft.EntityFrameworkCore;
+using CodeNetix.Ingestion.Features.RecordLabelEvent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -12,41 +8,29 @@ namespace CodeNetix.Ingestion.Features.PollGitHub;
 /// <summary>Resultado de un ciclo de sondeo; <see cref="RetryAfter"/> solo si un rate limit cortó el ciclo.</summary>
 internal sealed record PollCycleResult(int Accepted, int Ignored, int Failed, bool RateLimited, TimeSpan? RetryAfter);
 
-/// <summary>
-/// Un ciclo del sondeo de GitHub (FR-6, FR-26, AD-4), nunca dos a la vez. Por cada repositorio: lista condicional
-/// (<c>ETag</c>) de las issues abiertas con la etiqueta; por cada issue que ha cambiado desde la última vez que se procesó
-/// con éxito, el evento <c>labeled</c> más reciente y su clave <c>gh:…:labeled:&lt;id&gt;</c>:
-/// <list type="bullet">
-/// <item>clave ya en <c>ing_events</c> → nada (ni permiso);</item>
-/// <item>Evento <c>Accepted</c> de otra Fuente para la misma issue recibido después de la etiqueta → <c>Ignored</c>
-/// (<see cref="AlreadyLaunchedReason"/>): la etiqueta ya se consumió;</item>
-/// <item>permiso de escritura de quien etiquetó: <c>Granted</c> → <c>Accepted</c> y aviso al Dispatcher; <c>Denied</c> o sin
-/// actor → <c>Ignored</c> (no autorizado); <c>Unavailable</c> → nada (falla cerrado, se reintenta).</item>
-/// </list>
-/// Un fallo deja el repositorio pendiente (sin guardar el <c>ETag</c>) y no afecta a los demás; un rate limit corta el ciclo.
-/// Nunca crea Ejecuciones.
-/// </summary>
 /// <summary>Un ciclo de sondeo (costura para probar <see cref="GitHubPollingService"/> con un reloj falso).</summary>
 internal interface IGitHubPollCycle
 {
     Task<PollCycleResult> RunCycleAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Un ciclo del sondeo de GitHub (FR-6, FR-26, AD-4), nunca dos a la vez. Por cada repositorio: lista condicional
+/// (<c>ETag</c>) de las issues abiertas con la etiqueta; por cada issue que ha cambiado desde la última vez que se procesó
+/// con éxito, el evento <c>labeled</c> más reciente, que registra <see cref="LabelEventRecorder"/> (el mismo que el
+/// webhook, 7.2): clave ya existente → nada; lanzada por otra Fuente después de etiquetarla → <c>Ignored</c>
+/// (<see cref="AlreadyLaunchedReason"/>); permiso de quien etiquetó → <c>Accepted</c> o <c>Ignored</c>; GitHub no responde
+/// → nada (falla cerrado, se reintenta).
+/// Un fallo deja el repositorio pendiente (sin guardar el <c>ETag</c>) y no afecta a los demás; un rate limit corta el ciclo.
+/// Nunca crea Ejecuciones.
+/// </summary>
 internal sealed partial class GitHubPoller(
     IOptions<GitHubPollingOptions> options,
     ILabeledIssueSource source,
-    IRepositoryPermissions permissions,
-    IDbContextFactory<IngestionDbContext> contextFactory,
-    IEventDispatchSignal dispatchSignal,
-    TimeProvider timeProvider,
+    LabelEventRecorder recorder,
     ILogger<GitHubPoller> logger) : IGitHubPollCycle, IDisposable
 {
-    public const string AlreadyLaunchedReason = "ya lanzada por otra Fuente después de etiquetarla";
-
-    private const int SqliteConstraint = 19;
-    private const int SqliteConstraintUnique = 2067;
-
-    private static readonly JsonSerializerOptions PayloadJson = new(JsonSerializerDefaults.Web);
+    public const string AlreadyLaunchedReason = LabelEventRecorder.AlreadyLaunchedReason;
 
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Dictionary<string, RepositoryState> _states = new(StringComparer.Ordinal);
@@ -229,87 +213,23 @@ internal sealed partial class GitHubPoller(
             return null;
         }
 
-        var labelEvent = lookup.Event!;
-        var dedupKey = GitHubLabelEventKey.Format(repository.Owner, repository.Repo, number, labelEvent.Id);
-        var objectKey = GitHubObjectKey.Format(repository.Owner, repository.Repo, number);
-
-        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        if (await context.Events.AsNoTracking().AnyAsync(e => e.DedupKey == dedupKey, cancellationToken).ConfigureAwait(false))
+        var result = await recorder.RecordAsync(repository.Owner, repository.Repo, number, label, lookup.Event!, deliveryId: null, cancellationToken).ConfigureAwait(false);
+        switch (result.Status)
         {
-            return null;
-        }
-
-        var actor = IsLogin(labelEvent.Actor) ? labelEvent.Actor!.Trim() : null;
-        EventStatus status;
-        string? reason;
-        if (labelEvent.CreatedAt is { } labeledAt
-            && await context.Events.AsNoTracking().AnyAsync(
-                e => e.ObjectKey == objectKey && e.Source != EventSource.GitHub && e.Status == EventStatus.Accepted && e.ReceivedAt >= labeledAt,
-                cancellationToken).ConfigureAwait(false))
-        {
-            (status, reason) = (EventStatus.Ignored, AlreadyLaunchedReason);
-        }
-        else if (actor is null)
-        {
-            (status, reason) = (EventStatus.Ignored, ManualEventIngestion.UnauthorizedReason);
-        }
-        else
-        {
-            // FR-26: el actor es quien puso la etiqueta; el token de la instancia solo se usa para preguntar.
-            var access = await permissions.GetWriteAccessAsync(repository.Owner, repository.Repo, actor, cancellationToken).ConfigureAwait(false);
-            if (access.Status == WriteAccessStatus.Unavailable)
-            {
-                return new GitHubQueryFailure(access.Reason ?? "GitHub no responde", false, null);
-            }
-
-            (status, reason) = access.Status == WriteAccessStatus.Granted
-                ? (EventStatus.Accepted, (string?)null)
-                : (EventStatus.Ignored, ManualEventIngestion.UnauthorizedReason);
-        }
-
-        var payload = new PolledEventPayload(repository.FullName, number, label, labelEvent.Id, labelEvent.CreatedAt);
-        var envelope = new EventEnvelope(
-            Id: Guid.CreateVersion7(),
-            Source: EventSource.GitHub,
-            ObjectKey: objectKey,
-            DedupKey: dedupKey,
-            Actor: actor,
-            Payload: JsonSerializer.Serialize(payload, PayloadJson),
-            Status: status,
-            IgnoredReason: reason,
-            ReceivedAt: timeProvider.GetUtcNow());
-
-        context.Events.Add(EventRecord.FromEnvelope(envelope));
-        try
-        {
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (DbUpdateException ex) when (ex.InnerException is SqliteException { SqliteErrorCode: SqliteConstraint, SqliteExtendedErrorCode: SqliteConstraintUnique })
-        {
-            // Otra Fuente con la misma clave (webhook, 7.2) ganó la carrera: ya existe.
-            return null;
-        }
-
-        if (status == EventStatus.Accepted)
-        {
-            totals.Accepted++;
-            dispatchSignal.Notify();
-            LogAccepted(repository.FullName, number, envelope.Id, actor!);
-        }
-        else
-        {
-            totals.Ignored++;
-            LogIgnored(repository.FullName, number, envelope.Id, reason!);
+            case LabelEventRecordStatus.Unavailable:
+                // Un rate limit en la consulta de permiso corta el ciclo como cualquier otro (el límite es del token).
+                return new GitHubQueryFailure(result.Reason ?? "GitHub no responde", result.RateLimited, null);
+            case LabelEventRecordStatus.Accepted:
+                totals.Accepted++;
+                LogAccepted(repository.FullName, number, result.EventId!.Value, result.Actor!);
+                break;
+            case LabelEventRecordStatus.Ignored:
+                totals.Ignored++;
+                LogIgnored(repository.FullName, number, result.EventId!.Value, result.Reason!);
+                break;
         }
 
         return null;
-    }
-
-    /// <summary>Login de GitHub plausible: no vacío, ≤ 100 caracteres, sin caracteres de control ni <c>/</c>.</summary>
-    private static bool IsLogin(string? login)
-    {
-        var trimmed = login?.Trim();
-        return !string.IsNullOrEmpty(trimmed) && trimmed.Length <= 100 && !trimmed.Any(char.IsControl) && !trimmed.Contains('/');
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Sondeo: Evento {EventId} aceptado para {Repository}#{Number} (etiquetada por {Actor}).")]
@@ -358,7 +278,4 @@ internal sealed partial class GitHubPoller(
 
         public int Failed { get; set; }
     }
-
-    /// <summary>Lo único que se guarda del sondeo: datos del disparo, nunca el JSON de GitHub ni el token.</summary>
-    private sealed record PolledEventPayload(string Repository, long IssueNumber, string Label, long LabelEventId, DateTimeOffset? LabeledAt);
 }

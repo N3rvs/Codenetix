@@ -63,7 +63,10 @@ internal sealed class PollingInstanceOptions
     /// </summary>
     public List<string> Repositories { get; set; } = [];
 
-    /// <summary><c>CODENETIX__Polling__Label</c> (por defecto <c>codenetix</c>).</summary>
+    /// <summary>
+    /// <c>CODENETIX__Polling__Label</c> (por defecto <c>codenetix</c>): la etiqueta de disparo de la instancia, compartida por
+    /// el sondeo y el webhook de GitHub.
+    /// </summary>
     public string? Label { get; set; }
 
     /// <summary><c>CODENETIX__Polling__IntervalSeconds</c> (por defecto 300, entre 60 y 86400).</summary>
@@ -173,8 +176,29 @@ internal sealed class LimitsInstanceOptions
 
 internal sealed class GitHubInstanceOptions
 {
+    public const string SectionName = InstanceOptions.SectionName + ":GitHub";
+
+    public const string WebhookRepositoriesKey = SectionName + ":WebhookRepositories";
+
+    public const int MinWebhookSecretLength = 16;
+
     /// <summary><c>CODENETIX__GitHub__Token</c>.</summary>
     public string? Token { get; set; }
+
+    /// <summary>
+    /// <c>CODENETIX__GitHub__WebhookSecret</c>: secreto del webhook de GitHub (FR-7). Sin valor, <c>:5001/webhooks/github</c>
+    /// está desactivado (404). Con valor, al menos 16 caracteres. Nunca se registra.
+    /// </summary>
+    public string? WebhookSecret { get; set; }
+
+    /// <summary>
+    /// <c>CODENETIX__GitHub__WebhookRepositories</c>: <c>owner/repo</c> aceptados por el webhook, con el formato de
+    /// <c>CODENETIX__Polling__Repositories</c> (lo lee Host en crudo). Vacío (por defecto) = cualquier repositorio.
+    /// </summary>
+    public List<string> WebhookRepositories { get; set; } = [];
+
+    /// <summary>Secreto recortado; <c>null</c> si no hay.</summary>
+    public string? EffectiveWebhookSecret => string.IsNullOrWhiteSpace(WebhookSecret) ? null : WebhookSecret.Trim();
 }
 
 internal sealed class HostInstanceOptions

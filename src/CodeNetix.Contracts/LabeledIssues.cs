@@ -72,6 +72,12 @@ public sealed record LabelEventLookup(LabelEventLookupStatus Status, LabelEvent?
 {
     public static readonly LabelEventLookup NotFound = new(LabelEventLookupStatus.NotFound, null, null);
 
+    /// <summary><c>NotFound</c> porque GitHub no ve la issue (404/410: borrada, transferida o repositorio invisible para el token).</summary>
+    public static readonly LabelEventLookup IssueNotFound = new(LabelEventLookupStatus.NotFound, null, null) { IssueMissing = true };
+
+    /// <summary>Solo con <c>NotFound</c>: la issue (o el repositorio) no existe para el token; volver a preguntar no cambia nada.</summary>
+    public bool IssueMissing { get; init; }
+
     public static LabelEventLookup Found(LabelEvent labelEvent) => new(LabelEventLookupStatus.Found, labelEvent, null);
 
     public static LabelEventLookup Unavailable(GitHubQueryFailure failure) => new(LabelEventLookupStatus.Unavailable, null, failure);

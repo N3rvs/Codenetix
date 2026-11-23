@@ -6,6 +6,7 @@ using CodeNetix.Host.Configuration;
 using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
 using CodeNetix.Ingestion.Features.PollGitHub;
+using CodeNetix.Ingestion.Features.ReceiveGitHubWebhook;
 using CodeNetix.Persistence;
 using CodeNetix.Pipeline;
 using CodeNetix.Pipeline.Features.Budget;
@@ -100,6 +101,10 @@ internal static class CodeNetixComposition
                 instance.Polling ??= new PollingInstanceOptions();
                 var repositories = configuration.GetSection(PollingInstanceOptions.RepositoriesKey);
                 instance.Polling.Repositories = repositories.Exists() ? PollingInstanceOptions.ReadRepositories(repositories) : [];
+
+                instance.GitHub ??= new GitHubInstanceOptions();
+                var webhookRepositories = configuration.GetSection(GitHubInstanceOptions.WebhookRepositoriesKey);
+                instance.GitHub.WebhookRepositories = webhookRepositories.Exists() ? PollingInstanceOptions.ReadRepositories(webhookRepositories) : [];
             });
         builder.Services.AddOptions<PricingOptions>()
             .Configure<IOptions<InstanceOptions>>((pricing, instance) =>
@@ -189,6 +194,33 @@ internal static class CodeNetixComposition
 
                 polling.Label = source.EffectiveLabel;
                 polling.Interval = TimeSpan.FromSeconds(source.IntervalSeconds);
+            });
+    }
+
+    /// <summary>
+    /// Webhook de GitHub (FR-7), solo en <c>serve</c>: <see cref="GitHubWebhookOptions"/> desde
+    /// <c>CODENETIX__GitHub__WebhookSecret</c> (recortado; sin valor, desactivado), <c>CODENETIX__GitHub__WebhookRepositories</c>
+    /// (en minúsculas) y la etiqueta de disparo compartida con el sondeo (<c>CODENETIX__Polling__Label</c>).
+    /// </summary>
+    public static void AddGitHubWebhooks(this WebApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.AddCodeNetixGitHubWebhooks();
+        builder.Services.AddOptions<GitHubWebhookOptions>()
+            .Configure<IOptions<InstanceOptions>>((webhook, instance) =>
+            {
+                var gitHub = instance.Value.GitHub ?? new GitHubInstanceOptions();
+                webhook.Secret = gitHub.EffectiveWebhookSecret;
+                webhook.Label = (instance.Value.Polling ?? new PollingInstanceOptions()).EffectiveLabel;
+                webhook.Repositories.Clear();
+                foreach (var value in gitHub.WebhookRepositories ?? [])
+                {
+                    if (PollingInstanceOptions.TryParseRepository(value, out var owner, out var repo))
+                    {
+                        webhook.Repositories.Add($"{owner}/{repo}");
+                    }
+                }
             });
     }
 
