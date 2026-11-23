@@ -56,6 +56,19 @@ internal sealed class FakeOpenAIServer : IAsyncDisposable
             });
         });
 
+        // Comprobación de keys desde el Panel (historia 8.1): la llamada autenticada más barata.
+        _app.MapGet("/v1/models", (HttpContext context) =>
+        {
+            _requests.Enqueue(new Request(
+                context.Request.Path + context.Request.QueryString,
+                string.Empty,
+                context.Request.Headers.ToDictionary(h => h.Key, h => h.Value.ToString(), StringComparer.OrdinalIgnoreCase)));
+
+            return ModelsStatus == StatusCodes.Status200OK
+                ? Results.Json(new { data = new[] { new { id = "local-model", type = "model" } } })
+                : Results.Json(new { error = new { message = "invalid x-api-key", type = "authentication_error" } }, statusCode: ModelsStatus);
+        });
+
         _app.MapFallback((HttpContext context) =>
         {
             _requests.Enqueue(new Request(context.Request.Path.ToString(), string.Empty, new Dictionary<string, string>()));
@@ -68,6 +81,9 @@ internal sealed class FakeOpenAIServer : IAsyncDisposable
     public string ReviewerContent { get; set; } = FakeChatClient.ValidVerdictJson;
 
     public int Status { get; set; } = StatusCodes.Status200OK;
+
+    /// <summary>Estado de <c>GET /v1/models</c> (por defecto 200).</summary>
+    public int ModelsStatus { get; set; } = StatusCodes.Status200OK;
 
     /// <summary><c>error.message</c> de las respuestas de error.</summary>
     public string ErrorMessage { get; set; } = "upstream exploded";

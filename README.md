@@ -38,6 +38,9 @@ docker run -d --name codenetix \
   responde…").
 - `--group-add`: CodeNetix no se ejecuta como root; necesita el grupo propietario del socket para poder usarlo. Con
   Docker Desktop (macOS y Windows) el socket pertenece a root: usa `--group-add 0`.
+- `CODENETIX__GitHub__Token` y `CODENETIX__Providers__Anthropic__ApiKey` son opcionales en el comando: si los omites,
+  CodeNetix arranca en modo diagnóstico y puedes pegarlos después en el Panel (ver
+  [Configurar claves desde el Panel](#configurar-claves-desde-el-panel)).
 
 ### 2. Comprobar salud y lanzar tu primer PR
 
@@ -75,6 +78,40 @@ docker build -f docker/sandbox.Dockerfile -t codenetix-sandbox .
 
 Al usar imágenes construidas localmente, puedes sustituir `ghcr.io/n3rvs/codenetix:v0.1.0` por `codenetix` y omitir
 `CODENETIX__Sandbox__Image` (o apuntar a tu etiqueta local).
+
+## Configurar claves desde el Panel
+
+Si no quieres tocar variables de entorno, arranca CodeNetix sin `CODENETIX__GitHub__Token` ni
+`CODENETIX__Providers__*__ApiKey` y configúralas desde el navegador:
+
+1. Abre `http://127.0.0.1:5000` y entra con el `admin-token` (`docker exec codenetix cat /data/admin.token`).
+2. Como faltan claves, el Panel muestra la pantalla **Configura CodeNetix**. Pega:
+   - el **token de GitHub**: crea un [token fine-grained](https://github.com/settings/personal-access-tokens/new) con
+     acceso a tus repositorios y los permisos *Contents*, *Issues* y *Pull requests* en «Read and write» y *Metadata*
+     en «Read-only»;
+   - la **key de Anthropic**, desde la [consola de Anthropic](https://console.anthropic.com/settings/keys);
+   - opcionalmente, una **key de OpenAI** ([platform.openai.com](https://platform.openai.com/api-keys)).
+3. Pulsa **Probar y guardar**. CodeNetix comprueba cada clave con el servicio real (`GET /user` de GitHub y la lista de
+   modelos del Proveedor) y solo guarda si todas son válidas. Al terminar, la instancia pasa de modo diagnóstico a
+   **Listo sin reiniciar**.
+
+Para cambiar o renovar una clave más adelante, usa el botón **Configuración** de la cabecera del Panel. Las Ejecuciones
+nuevas, las llamadas a GitHub y el Egress Gateway usan la clave nueva al momento; las que ya estaban en marcha terminan
+con la anterior.
+
+Cómo se guardan y qué prioridad tienen:
+
+- Las variables de entorno y `codenetix.instance.yml` **siguen funcionando y mandan**: una clave definida ahí aparece
+  en el Panel como «configurada por variable de entorno» (o por el archivo de instancia) y no se puede cambiar desde
+  él.
+- Las claves del Panel se guardan **cifradas** (AES-256-GCM) en `/data/panel-secrets.enc`, con la clave de cifrado en
+  `/data/panel-secrets.key` (ambos con permisos `0600`). Nunca se devuelven por la API (solo «configurada» y sus 4
+  últimos caracteres), no se escriben en logs ni en los eventos de las Ejecuciones y pasan por el mismo redactor de
+  secretos que el resto.
+- El cifrado protege frente a copias sueltas del archivo, no frente a quien puede leer todo el volumen `/data` (que
+  también contiene el `admin-token`): protege ese volumen y sus copias de seguridad. Si borras `panel-secrets.key`,
+  CodeNetix arranca sin las claves del Panel y te pide volver a introducirlas.
+- API (solo en `:5000` y con el `admin-token`): `GET /api/settings/secrets` y `PUT /api/settings/secrets`.
 
 ## Verificación de firmas (`cosign`) y SBOM
 

@@ -1309,3 +1309,120 @@ a {
   color: #bae6fd;
   font-size: 0.85rem;
 }
+
+/* Configuración de claves (historia 8.1) */
+.status-card-wide {
+  max-width: 680px;
+}
+
+.secrets-modal {
+  max-width: 680px;
+  max-height: calc(100vh - 2.5rem);
+  overflow-y: auto;
+}
+
+.secrets-form {
+  margin-top: 1rem;
+}
+
+.secret-field {
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.secret-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.secret-field-head label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.status-card .secret-help,
+.secret-help {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.status-card .secret-status,
+.secret-status {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.secret-field input {
+  width: 100%;
+  padding: 0.72rem 0.9rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+}
+
+.secret-field input:focus {
+  outline: 2px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.secret-field input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.secret-field input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.field-error {
+  font-size: 0.8rem;
+  color: #fecaca;
+}
+
+.success-banner {
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: var(--success-soft);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: #a7f3d0;
+  font-size: 0.85rem;
+}
+
+.status-card .success-banner ul,
+.success-banner ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  color: inherit;
+}
+
+.warning-banner {
+  padding: 0.75rem 0.9rem;
+  border-radius: 8px;
+  background: var(--warning-soft);
+  border: 1px solid rgba(251, 191, 36, 0.4);
+  color: #fde68a;
+  font-size: 0.85rem;
+}
+
+.status-card .secret-footnote,
+.secret-footnote {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
