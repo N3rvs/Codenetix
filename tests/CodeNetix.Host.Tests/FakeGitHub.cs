@@ -76,6 +76,9 @@ internal sealed class FakeGitHub : IAsyncDisposable
                 }
 
                 var label = context.Request.Query["labels"].ToString();
+
+                // Como GitHub: state=open por defecto; closed o all también.
+                var state = context.Request.Query["state"].ToString() is { Length: > 0 } requested ? requested : "open";
                 var size = Math.Clamp(int.TryParse(context.Request.Query["per_page"], out var perPage) ? perPage : 30, 1, 100);
                 var all = ListedIssuesOf(owner, repo);
                 FakeListedIssue[] matching;
@@ -83,13 +86,16 @@ internal sealed class FakeGitHub : IAsyncDisposable
                 {
                     matching = [.. all
                         .Where(i => string.Equals(i.Label, label, StringComparison.OrdinalIgnoreCase))
+                        .Where(i => state == "all" || string.Equals(i.State, state, StringComparison.Ordinal))
                         .OrderByDescending(i => i.UpdatedAt, StringComparer.Ordinal)];
                 }
 
                 var slice = matching.Skip((page - 1) * size).Take(size)
                     .Select(i => i.PullRequest
-                        ? (object)new { number = i.Number, updated_at = i.UpdatedAt, state = "open", pull_request = new { url = "x" } }
-                        : new { number = i.Number, updated_at = i.UpdatedAt, state = "open" })
+                        ? (object)new { number = i.Number, updated_at = i.UpdatedAt, state = i.State, pull_request = new { url = "x" } }
+                        : i.Body is not null
+                            ? new { number = i.Number, updated_at = i.UpdatedAt, state = i.State, body = i.Body }
+                            : new { number = i.Number, updated_at = i.UpdatedAt, state = i.State })
                     .ToArray();
                 var json = System.Text.Json.JsonSerializer.Serialize(slice);
                 var etag = "\"" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(json)))[..16] + "\"";
@@ -101,6 +107,32 @@ internal sealed class FakeGitHub : IAsyncDisposable
                 }
 
                 return Results.Text(json, "application/json");
+            });
+
+            // Issues de seguimiento de Sentry (7.3): crear una issue con etiquetas.
+            _app.MapPost(prefix + "/repos/{owner}/{repo}/issues", async (HttpContext context, string owner, string repo) =>
+            {
+                Record(context, $"issue-post:{owner}/{repo}");
+                using var payload = await System.Text.Json.JsonDocument.ParseAsync(context.Request.Body, cancellationToken: context.RequestAborted);
+                await DelayAsync(context);
+                if (IssuePostStatus != StatusCodes.Status201Created)
+                {
+                    AddRateLimitHeader(context);
+                    return Results.Json(new { message = "Not Found" }, statusCode: IssuePostStatus);
+                }
+
+                var root = payload.RootElement;
+                var labels = root.TryGetProperty("labels", out var labelsElement)
+                    ? labelsElement.EnumerateArray().Select(e => e.GetString()!).ToArray()
+                    : [];
+                var number = Interlocked.Increment(ref _nextIssueNumber);
+                var created = new FakeCreatedIssue(number, root.GetProperty("title").GetString()!, root.GetProperty("body").GetString()!, labels);
+                _createdIssues.Enqueue((owner, repo, created));
+                SetListedIssue(owner, repo, number, DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture), labels.FirstOrDefault() ?? string.Empty, body: created.Body);
+                var shownLabels = IssuePostDropsLabels ? [] : labels.Select(l => new { name = l }).ToArray();
+                return IssuePostRespondsUnreadable
+                    ? Results.Text("{}", "application/json", statusCode: StatusCodes.Status201Created)
+                    : Results.Json(new { number, title = created.Title, body = created.Body, labels = shownLabels }, statusCode: StatusCodes.Status201Created);
             });
 
             _app.MapGet(prefix + "/repos/{owner}/{repo}/issues/{number}/events", (HttpContext context, string owner, string repo, string number) =>
@@ -421,15 +453,37 @@ internal sealed class FakeGitHub : IAsyncDisposable
     public long? RateLimitReset { get; set; }
 
     /// <summary>Pone (o sustituye) una issue abierta en el listado de <c>owner/repo</c>.</summary>
-    public void SetListedIssue(string owner, string repo, long number, string updatedAt, string label = "codenetix", bool pullRequest = false)
+    public void SetListedIssue(string owner, string repo, long number, string updatedAt, string label = "codenetix", bool pullRequest = false, string? body = null, string state = "open")
     {
         var list = ListedIssuesOf(owner, repo);
         lock (list)
         {
             list.RemoveAll(i => i.Number == number);
-            list.Add(new FakeListedIssue(number, updatedAt, label, pullRequest));
+            list.Add(new FakeListedIssue(number, updatedAt, label, pullRequest, body, state));
         }
     }
+
+    // --- Issues de seguimiento de Sentry (7.3) ---------------------------------------
+
+    private readonly ConcurrentQueue<(string Owner, string Repo, FakeCreatedIssue Issue)> _createdIssues = new();
+    private long _nextIssueNumber = 500;
+
+    /// <summary>Respuesta de <c>POST /repos/{o}/{r}/issues</c> (por defecto 201).</summary>
+    public int IssuePostStatus { get; set; } = StatusCodes.Status201Created;
+
+    /// <summary>Crea la issue pero responde un 201 sin <c>number</c> (respuesta ilegible).</summary>
+    public bool IssuePostRespondsUnreadable { get; set; }
+
+    /// <summary>Responde el 201 sin etiquetas (como GitHub cuando el token no puede ponerlas).</summary>
+    public bool IssuePostDropsLabels { get; set; }
+
+    public int IssuePosts => _requests.Count(r => r.Kind.StartsWith("issue-post:", StringComparison.Ordinal));
+
+    /// <summary>Issues creadas en <c>owner/repo</c>, en orden.</summary>
+    public IReadOnlyList<FakeCreatedIssue> CreatedIssues(string owner, string repo) =>
+        [.. _createdIssues.Where(i => i.Owner == owner && i.Repo == repo).Select(i => i.Issue)];
+
+    internal sealed record FakeCreatedIssue(long Number, string Title, string Body, IReadOnlyList<string> Labels);
 
     public void RemoveListedIssue(string owner, string repo, long number)
     {
@@ -490,7 +544,7 @@ internal sealed class FakeGitHub : IAsyncDisposable
         context.Response.Headers["Link"] = string.Join(", ", parts);
     }
 
-    internal sealed record FakeListedIssue(long Number, string UpdatedAt, string Label, bool PullRequest);
+    internal sealed record FakeListedIssue(long Number, string UpdatedAt, string Label, bool PullRequest, string? Body = null, string State = "open");
 
     internal sealed record FakeIssueEvent(long Id, string Event, string? Label, string? Actor, DateTimeOffset? CreatedAt);
 

@@ -1,6 +1,7 @@
 import type {
   CancelRunResponse,
   EventResponse,
+  IgnoredEventSummary,
   ProblemDetails,
   RunEvent,
   RunResponse,
@@ -287,6 +288,33 @@ export async function fetchEvent(
   }
 
   return (await response.json()) as EventResponse
+}
+
+/**
+ * Eventos ignorados recientes (FR-8): p. ej. un proyecto de Sentry sin Repositorio objetivo o un disparo no autorizado.
+ */
+export async function fetchIgnoredEvents(
+  token: string,
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<IgnoredEventSummary[]> {
+  const response = await fetch(`/api/events/ignored?limit=${encodeURIComponent(String(limit))}`, {
+    signal,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (response.status === 401) {
+    throw new UnauthorizedError()
+  }
+
+  if (!response.ok) {
+    throw new ApiHttpError(response.status, await readProblemDetail(response))
+  }
+
+  return (await response.json()) as IgnoredEventSummary[]
 }
 
 export type WaitForEventRunResult =

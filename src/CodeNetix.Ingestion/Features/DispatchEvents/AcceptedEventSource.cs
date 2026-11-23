@@ -11,8 +11,26 @@ namespace CodeNetix.Ingestion.Features.DispatchEvents;
 /// </summary>
 internal sealed class AcceptedEventSource(
     IDbContextFactory<IngestionDbContext> contextFactory,
-    TimeProvider timeProvider) : IAcceptedEventSource, IEventReader
+    TimeProvider timeProvider) : IAcceptedEventSource, IEventReader, IIgnoredEventReader
 {
+    public async Task<IReadOnlyList<IgnoredEventInfo>> ListIgnoredAsync(int max, CancellationToken cancellationToken)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);
+
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var rows = await context.Events
+            .AsNoTracking()
+            .Where(e => e.Status == EventStatus.Ignored)
+            .OrderByDescending(e => e.ReceivedAt)
+            .ThenByDescending(e => e.Id)
+            .Take(max)
+            .Select(e => new { e.Id, e.Source, e.ObjectKey, e.IgnoredReason, e.ReceivedAt })
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        return [.. rows.Select(r => new IgnoredEventInfo(r.Id, r.Source, r.ObjectKey, r.IgnoredReason, r.ReceivedAt))];
+    }
+
     public async Task<IReadOnlyList<PendingEvent>> GetPendingAsync(int max, IReadOnlyCollection<Guid> exclude, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(max);

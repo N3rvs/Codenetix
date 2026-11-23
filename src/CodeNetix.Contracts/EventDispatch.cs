@@ -46,3 +46,13 @@ public interface IEventReader
 {
     Task<EventStatusInfo?> FindAsync(Guid eventId, CancellationToken cancellationToken);
 }
+
+/// <summary>Evento <see cref="EventStatus.Ignored"/> tal como lo muestra el Panel (FR-8: motivo visible).</summary>
+public sealed record IgnoredEventInfo(Guid EventId, EventSource Source, string ObjectKey, string? Reason, DateTimeOffset ReceivedAt);
+
+/// <summary>Eventos ignorados recientes (implementada por Ingestion).</summary>
+public interface IIgnoredEventReader
+{
+    /// <summary>Hasta <paramref name="max"/> Eventos <c>Ignored</c>, del más reciente al más antiguo.</summary>
+    Task<IReadOnlyList<IgnoredEventInfo>> ListIgnoredAsync(int max, CancellationToken cancellationToken);
+}

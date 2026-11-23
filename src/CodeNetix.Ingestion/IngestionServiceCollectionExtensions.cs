@@ -3,6 +3,7 @@ using CodeNetix.Ingestion.Data;
 using CodeNetix.Ingestion.Features.DispatchEvents;
 using CodeNetix.Ingestion.Features.PollGitHub;
 using CodeNetix.Ingestion.Features.ReceiveGitHubWebhook;
+using CodeNetix.Ingestion.Features.ReceiveSentryWebhook;
 using CodeNetix.Ingestion.Features.RecordLabelEvent;
 using CodeNetix.Ingestion.Features.SubmitGitHubActionEvent;
 using CodeNetix.Ingestion.Features.SubmitManualEvent;
@@ -34,6 +35,26 @@ public static class IngestionServiceCollectionExtensions
         services.AddSingleton<AcceptedEventSource>();
         services.AddSingleton<IAcceptedEventSource>(sp => sp.GetRequiredService<AcceptedEventSource>());
         services.AddSingleton<IEventReader>(sp => sp.GetRequiredService<AcceptedEventSource>());
+        services.AddSingleton<IIgnoredEventReader>(sp => sp.GetRequiredService<AcceptedEventSource>());
+        return services;
+    }
+
+    /// <summary>
+    /// Registra el webhook de Sentry (FR-7, FR-8): <see cref="SentryWebhookOptions"/> (las rellena Host),
+    /// <see cref="ISentryWebhookIngestion"/> (firma, filtro, correspondencia y cola) y el <c>BackgroundService</c> que procesa
+    /// la cola. Solo para <c>serve</c>; necesita <see cref="ISentryTrackingIssues"/> (módulo GitHub) e
+    /// <see cref="IInstanceHealth"/> (Host).
+    /// </summary>
+    public static IServiceCollection AddCodeNetixSentryWebhooks(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<SentryWebhookOptions>();
+        services.TryAddSingleton<SentryEventRecorder>();
+        services.TryAddSingleton<SentryWebhookIngestion>();
+        services.TryAddSingleton<ISentryWebhookIngestion>(sp => sp.GetRequiredService<SentryWebhookIngestion>());
+        services.TryAddSingleton<SentryWebhookProcessor>();
+        services.AddHostedService(sp => sp.GetRequiredService<SentryWebhookProcessor>());
         return services;
     }
 

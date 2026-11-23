@@ -155,6 +155,53 @@
         }
       }
     },
+    "/api/events/ignored": {
+      "get": {
+        "tags": [
+          "ListIgnoredEventsEndpoint"
+        ],
+        "operationId": "ListIgnoredEvents",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "pattern": "^-?(?:0|[1-9]\\d*)$",
+              "type": [
+                "integer",
+                "string"
+              ],
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/IgnoredEventSummary"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/runs": {
       "get": {
         "tags": [
@@ -436,6 +483,38 @@
           "StageError",
           null
         ]
+      },
+      "IgnoredEventSummary": {
+        "required": [
+          "eventId",
+          "source",
+          "objectKey",
+          "reason",
+          "receivedAt"
+        ],
+        "type": "object",
+        "properties": {
+          "eventId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "string"
+          },
+          "objectKey": {
+            "type": "string"
+          },
+          "reason": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "receivedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
       },
       "NotAutomatableCategory": {
         "enum": [
@@ -2150,6 +2229,9 @@
     },
     {
       "name": "GetEventEndpoint"
+    },
+    {
+      "name": "ListIgnoredEventsEndpoint"
     },
     {
       "name": "ListRunsEndpoint"

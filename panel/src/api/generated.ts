@@ -19,6 +19,14 @@ export interface EventResponse {
 
 export type FailureReason = "InvalidRepoConfig" | "CloneFailed" | "NotAutomatable" | "SchemaInvalid" | "TestsFailed" | "ReviewRejected" | "ReviewRoundsExhausted" | "BudgetExceeded" | "Timeout" | "HostRestarted" | "StageError" | null
 
+export interface IgnoredEventSummary {
+  eventId: string
+  source: string
+  objectKey: string
+  reason: string | null
+  receivedAt: string
+}
+
 export type NotAutomatableCategory = "missing_information" | "too_large" | "out_of_scope"
 
 export type NotificationKind = "NotAutomatable" | "PullRequestCreated" | "RunFailed" | "RunCancelled"

@@ -1,12 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   cancelRun,
+  fetchIgnoredEvents,
   fetchRunDetail,
   isRunCancellable,
   isSafeHttpUrl,
   UnauthorizedError,
 } from '../api/client'
-import type { RunResponse, RunState, RunSummary, VerdictDecision } from '../api/generated'
+import type {
+  IgnoredEventSummary,
+  RunResponse,
+  RunState,
+  RunSummary,
+  VerdictDecision,
+} from '../api/generated'
+import { IgnoredEventsList } from './IgnoredEventsList'
 import { STATE_LABELS } from '../graph/buildPipelineGraph'
 import {
   aggregateTokenUsage,
@@ -456,6 +464,36 @@ export function RunHistoryView({
   const [detailState, setDetailState] = useState<DetailState>({ kind: 'idle' })
   const [cancellingRunIds, setCancellingRunIds] = useState<ReadonlySet<string>>(() => new Set())
   const [cancelError, setCancelError] = useState<string | null>(null)
+  const [ignoredEvents, setIgnoredEvents] = useState<readonly IgnoredEventSummary[]>([])
+  const [ignoredLoading, setIgnoredLoading] = useState(true)
+  const [ignoredError, setIgnoredError] = useState<string | null>(null)
+  const [ignoredReloadTick, setIgnoredReloadTick] = useState(0)
+
+  // Eventos ignorados (FR-8): se cargan al abrir el Historial y con «Actualizar».
+  useEffect(() => {
+    const controller = new AbortController()
+    setIgnoredLoading(true)
+    void fetchIgnoredEvents(token, 20, controller.signal)
+      .then((events) => {
+        if (controller.signal.aborted) return
+        setIgnoredEvents(events)
+        setIgnoredError(null)
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return
+        if (err instanceof UnauthorizedError) {
+          onLogout(err.message)
+          return
+        }
+        setIgnoredError(err instanceof Error ? err.message : 'No se pudieron cargar los Eventos ignorados.')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIgnoredLoading(false)
+      })
+    return () => {
+      controller.abort()
+    }
+  }, [token, ignoredReloadTick, onLogout])
 
   const selectedRunIdRef = useRef<string | null>(selectedHistoryRunId)
   selectedRunIdRef.current = selectedHistoryRunId
@@ -574,6 +612,7 @@ export function RunHistoryView({
             onClick={() => {
               onRefreshRuns()
               setDetailReloadTick((n) => n + 1)
+              setIgnoredReloadTick((n) => n + 1)
             }}
             disabled={loadingRuns}
           >
@@ -653,6 +692,8 @@ export function RunHistoryView({
             ))
           )}
         </div>
+
+        <IgnoredEventsList events={ignoredEvents} loading={ignoredLoading} error={ignoredError} />
       </aside>
 
       <main className="workspace history-detail-pane">
