@@ -77,6 +77,8 @@ public static class RunStateExtensions
 [JsonDerivedType(typeof(VerdictRecorded), nameof(VerdictRecorded))]
 [JsonDerivedType(typeof(RiskClassified), nameof(RiskClassified))]
 [JsonDerivedType(typeof(PullRequestOpened), nameof(PullRequestOpened))]
+[JsonDerivedType(typeof(SentryContextAttached), nameof(SentryContextAttached))]
+[JsonDerivedType(typeof(SentryContextUnavailable), nameof(SentryContextUnavailable))]
 public abstract record RunEvent
 {
     /// <summary>Monotónico por Ejecución, empieza en 1 y no tiene huecos.</summary>
@@ -163,6 +165,18 @@ public sealed record RiskClassified(RiskClass RiskClass, int DiffLines, IReadOnl
 
 /// <summary>Pull Request abierto en GitHub y persistido en <c>gh_pull_requests</c> (FR-17, AD-8).</summary>
 public sealed record PullRequestOpened(long Number, string Url, string Branch, string CommitSha) : RunEvent;
+
+/// <summary>
+/// El Analista recibe el contexto de la incidencia de Sentry <see cref="SentryIssueId"/> (historia 7.4): cuántos marcos y
+/// migas y cuántos caracteres. Nunca lleva texto de Sentry.
+/// </summary>
+public sealed record SentryContextAttached(string SentryIssueId, int Frames, int Breadcrumbs, int Characters, bool Truncated) : RunEvent;
+
+/// <summary>
+/// El Evento es de Sentry pero no hay contexto (sin configurar, Sentry no responde, token rechazado, rate limit): el
+/// análisis sigue sin él. <see cref="Reason"/> no lleva secretos ni texto de Sentry.
+/// </summary>
+public sealed record SentryContextUnavailable(string? SentryIssueId, string Reason) : RunEvent;
 
 /// <summary>
 /// Único punto de escritura de <c>run_events</c> (AD-3), implementado solo por Pipeline. Aplica

@@ -89,6 +89,8 @@ export type RunEvent =
   | RunEventVerdictRecorded
   | RunEventRiskClassified
   | RunEventPullRequestOpened
+  | RunEventSentryContextAttached
+  | RunEventSentryContextUnavailable
 
 export interface RunEventAnalysisRejected {
   type: "AnalysisRejected"
@@ -244,6 +246,29 @@ export interface RunEventSandboxCreated {
 
 export interface RunEventSandboxReleased {
   type: "SandboxReleased"
+  seq: number
+  runId: string
+  stageId?: string | null
+  at: string
+}
+
+export interface RunEventSentryContextAttached {
+  type: "SentryContextAttached"
+  sentryIssueId: string
+  frames: number
+  breadcrumbs: number
+  characters: number
+  truncated: boolean
+  seq: number
+  runId: string
+  stageId?: string | null
+  at: string
+}
+
+export interface RunEventSentryContextUnavailable {
+  type: "SentryContextUnavailable"
+  sentryIssueId: string | null
+  reason: string
   seq: number
   runId: string
   stageId?: string | null

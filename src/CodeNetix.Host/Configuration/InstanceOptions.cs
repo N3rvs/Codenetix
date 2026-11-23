@@ -62,7 +62,28 @@ internal sealed class SentryInstanceOptions
     /// </summary>
     public Dictionary<string, string?> Projects { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// <c>CODENETIX__Sentry__AuthToken</c> (historia 7.4): token de la API de Sentry (<c>event:read</c>, <c>project:read</c>).
+    /// Sin valor, el contexto de Sentry para el Analista y <c>codenetix fix &lt;url-de-sentry&gt;</c> están desactivados.
+    /// Nunca se registra.
+    /// </summary>
+    public string? AuthToken { get; set; }
+
+    /// <summary><c>CODENETIX__Sentry__Organization</c>: slug de la organización de Sentry (obligatorio con <see cref="AuthToken"/>).</summary>
+    public string? Organization { get; set; }
+
+    /// <summary><c>CODENETIX__Sentry__BaseUrl</c>: por defecto <c>https://sentry.io</c> (Sentry autoalojado, OQ-5).</summary>
+    public string? BaseUrl { get; set; }
+
     public string? EffectiveWebhookSecret => string.IsNullOrWhiteSpace(WebhookSecret) ? null : WebhookSecret.Trim();
+
+    public string? EffectiveAuthToken => string.IsNullOrWhiteSpace(AuthToken) ? null : AuthToken.Trim();
+
+    public string? EffectiveOrganization => string.IsNullOrWhiteSpace(Organization) ? null : Organization.Trim().ToLowerInvariant();
+
+    public string EffectiveBaseUrl => string.IsNullOrWhiteSpace(BaseUrl)
+        ? CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.DefaultBaseUrl
+        : BaseUrl.Trim();
 
     /// <summary>Pares (slug, valor) en crudo de la sección <c>Projects</c>.</summary>
     public static Dictionary<string, string?> ReadProjects(IConfigurationSection section)

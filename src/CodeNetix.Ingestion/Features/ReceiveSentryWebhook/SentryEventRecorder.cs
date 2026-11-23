@@ -179,6 +179,27 @@ internal sealed class SentryEventRecorder(
         return await InsertAsync(incident, dedupKey, null, SentryEventKey.Format(incident.IssueId), null, EventStatus.Ignored, reason, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Issue de seguimiento de la incidencia <paramref name="issueId"/> en <paramref name="owner"/>/<paramref name="repo"/> según
+    /// un Evento anterior (del webhook o manual desde Sentry), sin llamar a GitHub; <c>null</c> si no hay.
+    /// </summary>
+    public async Task<long?> FindTrackingIssueAsync(string issueId, string owner, string repo, CancellationToken cancellationToken)
+    {
+        var baseKey = SentryEventKey.Format(issueId);
+        var regressionPrefix = baseKey + SentryEventKey.RegressionSegment;
+        var manualInfix = $"/issues/{issueId}/:";
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        var objectKeys = await context.Events
+            .AsNoTracking()
+            .Where(e => (e.Source == EventSource.Sentry && (e.DedupKey == baseKey || e.DedupKey.StartsWith(regressionPrefix)))
+                || (e.Source == EventSource.Manual && e.DedupKey.Contains(manualInfix)))
+            .OrderByDescending(e => e.ReceivedAt)
+            .Select(e => e.ObjectKey)
+            .ToListAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return new SentryKeyResolution(baseKey, null, null, objectKeys).TrackingIssueIn(owner, repo);
+    }
+
     public void Dispose() => _gate.Dispose();
 
     private async Task<SentryRecordResult> InsertAsync(

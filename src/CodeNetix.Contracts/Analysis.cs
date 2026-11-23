@@ -19,13 +19,15 @@ public interface IIssueReader
 /// <summary>Entrada del Analista (AD-16 paso 3).</summary>
 /// <param name="RepositoryFiles">Rutas de <c>git ls-files</c>, como mucho <see cref="MaxRepositoryFiles"/>.</param>
 /// <param name="RepositoryFilesTruncated">El repositorio tiene más archivos que los de <paramref name="RepositoryFiles"/>.</param>
+/// <param name="SentryContext">Traza, contexto y frecuencia del error de Sentry (historia 7.4), o <c>null</c>.</param>
 public sealed record AnalysisInput(
     Guid RunId,
     UntrustedText IssueTitle,
     UntrustedText IssueBody,
     ImmutableArray<string> RepositoryFiles,
     bool RepositoryFilesTruncated,
-    EffectiveConfig Config)
+    EffectiveConfig Config,
+    UntrustedText? SentryContext = null)
 {
     public const int MaxRepositoryFiles = 2000;
 

@@ -111,6 +111,10 @@ function summarizeEvent(ev: RunEvent): string {
       return `Intento ${ev.attempt}: ${ev.error}`
     case 'AnalysisRejected':
       return `${ev.category} (${ev.model})`
+    case 'SentryContextAttached':
+      return `Sentry ${ev.sentryIssueId}: ${ev.frames} marcos, ${ev.breadcrumbs} migas${ev.truncated ? ' (recortado)' : ''}`
+    case 'SentryContextUnavailable':
+      return `Sin contexto de Sentry: ${ev.reason}`
     case 'SandboxCreated':
       return ev.image
     case 'SandboxReleased':

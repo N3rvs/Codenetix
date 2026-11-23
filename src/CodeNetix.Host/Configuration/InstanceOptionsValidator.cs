@@ -69,6 +69,20 @@ internal static class InstanceOptionsValidator
     public const string TooManySentryProjects =
         "CODENETIX__Sentry__Projects admite como mucho 100 proyectos.";
 
+    public const int MinSentryAuthTokenLength = 8;
+
+    public const string InvalidSentryAuthToken =
+        "CODENETIX__Sentry__AuthToken debe tener al menos 8 caracteres y ninguno de control (o no definirse para desactivar el contexto de Sentry).";
+
+    public const string MissingSentryOrganization =
+        "CODENETIX__Sentry__Organization es obligatorio cuando se define CODENETIX__Sentry__AuthToken (el slug de la organización de Sentry).";
+
+    public const string InvalidSentryOrganization =
+        "CODENETIX__Sentry__Organization no es un slug de organización de Sentry válido (letras, dígitos, '-' y '_', hasta 100 caracteres).";
+
+    public const string InvalidSentryBaseUrl =
+        "CODENETIX__Sentry__BaseUrl debe ser una URL http(s) absoluta sin credenciales, query ni fragmento (por defecto https://sentry.io).";
+
     public static string InvalidSentryProjectRepository(string slug) =>
         $"CODENETIX__Sentry__Projects__{slug} debe ser un repositorio owner/repo.";
 
@@ -194,6 +208,28 @@ internal static class InstanceOptionsValidator
 
     private static void ValidateSentry(SentryInstanceOptions sentry, List<string> reasons)
     {
+        if (sentry.EffectiveAuthToken is { } authToken && (authToken.Length < MinSentryAuthTokenLength || authToken.Any(char.IsControl)))
+        {
+            reasons.Add(InvalidSentryAuthToken);
+        }
+
+        if (sentry.EffectiveOrganization is { } organization)
+        {
+            if (!CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.IsOrganizationSlug(organization))
+            {
+                reasons.Add(InvalidSentryOrganization);
+            }
+        }
+        else if (sentry.EffectiveAuthToken is not null)
+        {
+            reasons.Add(MissingSentryOrganization);
+        }
+
+        if (!CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.IsValidBaseUrl(sentry.EffectiveBaseUrl))
+        {
+            reasons.Add(InvalidSentryBaseUrl);
+        }
+
         if (sentry.EffectiveWebhookSecret is { } secret
             && (secret.Length < GitHubInstanceOptions.MinWebhookSecretLength || secret.Any(char.IsControl)))
         {

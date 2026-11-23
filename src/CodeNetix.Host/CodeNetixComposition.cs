@@ -6,6 +6,7 @@ using CodeNetix.Host.Configuration;
 using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
 using CodeNetix.Ingestion.Features.PollGitHub;
+using CodeNetix.Ingestion.Features.ReadSentryContext;
 using CodeNetix.Ingestion.Features.ReceiveGitHubWebhook;
 using CodeNetix.Ingestion.Features.ReceiveSentryWebhook;
 using CodeNetix.Persistence;
@@ -94,6 +95,7 @@ internal static class CodeNetixComposition
             });
         builder.Services.Configure<InstanceLimits>(builder.Configuration.GetSection(LimitsInstanceOptions.SectionName));
         builder.Services.Configure<InstanceOptions>(builder.Configuration.GetSection(InstanceOptions.SectionName));
+        builder.AddSentryOptions();
 
         // CODENETIX__Polling__Repositories admite una cadena con comas, que el binder de colecciones no separa.
         builder.Services.AddOptions<InstanceOptions>()
@@ -241,9 +243,20 @@ internal static class CodeNetixComposition
         builder.Services.AddCodeNetixSentryWebhooks();
         builder.Services.AddOptions<SentryWebhookOptions>()
             .Configure<IOptions<InstanceOptions>>((webhook, instance) =>
+                webhook.Secret = (instance.Value.Sentry ?? new SentryInstanceOptions()).EffectiveWebhookSecret);
+    }
+
+    /// <summary>
+    /// Común a <c>serve</c> y <c>action</c>: el mapa proyecto de Sentry → Repositorio objetivo (<see cref="SentryWebhookOptions.Projects"/>,
+    /// que también usa <c>fix &lt;url-de-sentry&gt;</c>) y la API de Sentry (<see cref="SentryApiOptions"/>, historia 7.4) desde
+    /// <c>CODENETIX__Sentry__*</c>. Los valores inválidos ya dejan la instancia en <c>Diagnostic</c>.
+    /// </summary>
+    private static void AddSentryOptions(this WebApplicationBuilder builder)
+    {
+        builder.Services.AddOptions<SentryWebhookOptions>()
+            .Configure<IOptions<InstanceOptions>>((webhook, instance) =>
             {
                 var sentry = instance.Value.Sentry ?? new SentryInstanceOptions();
-                webhook.Secret = sentry.EffectiveWebhookSecret;
                 webhook.Projects.Clear();
                 foreach (var (key, value) in sentry.Projects ?? [])
                 {
@@ -253,6 +266,14 @@ internal static class CodeNetixComposition
                         webhook.Projects[slug] = new SentryTargetRepository(owner, repo);
                     }
                 }
+            });
+        builder.Services.AddOptions<SentryApiOptions>()
+            .Configure<IOptions<InstanceOptions>>((api, instance) =>
+            {
+                var sentry = instance.Value.Sentry ?? new SentryInstanceOptions();
+                api.AuthToken = sentry.EffectiveAuthToken;
+                api.Organization = sentry.EffectiveOrganization;
+                api.BaseUrl = sentry.EffectiveBaseUrl;
             });
     }
 

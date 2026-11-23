@@ -128,6 +128,8 @@ export function buildStageIdToNodeMap(events: readonly RunEvent[]): Map<string, 
       case 'SpecGenerated':
       case 'AnalystOutputRejected':
       case 'AnalysisRejected':
+      case 'SentryContextAttached':
+      case 'SentryContextUnavailable':
         map.set(stageId, 'analyzing')
         break
       case 'RunCreated':

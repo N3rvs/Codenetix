@@ -393,6 +393,9 @@ public sealed class OpenApiContractTests : IDisposable
             Stamp(new VerdictRecorded(1, ReviewerKind.Security, VerdictDecision.Approved, 0, "claude-sonnet-4-5"), 20, stageId),
             Stamp(new RiskClassified(RiskClass.Minor, 42, ["src/App.cs"]), 21, stageId),
             Stamp(new PullRequestOpened(7, "https://github.com/owner/repo/pull/7", "codenetix/fix-42", "abcdef0123456789"), 22, stageId),
+            Stamp(new SentryContextAttached("123", 12, 20, 4200, false), 23, null),
+            Stamp(new SentryContextUnavailable("123", "Sentry no responde"), 24, null),
+            Stamp(new SentryContextUnavailable(null, "fallo inesperado al obtener el contexto de Sentry"), 25, null),
         };
 
         return list.GroupBy(e => e.GetType()).ToDictionary(g => g.Key, g => g.ToList());

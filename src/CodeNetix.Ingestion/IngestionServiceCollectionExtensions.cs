@@ -2,6 +2,7 @@ using CodeNetix.Contracts;
 using CodeNetix.Ingestion.Data;
 using CodeNetix.Ingestion.Features.DispatchEvents;
 using CodeNetix.Ingestion.Features.PollGitHub;
+using CodeNetix.Ingestion.Features.ReadSentryContext;
 using CodeNetix.Ingestion.Features.ReceiveGitHubWebhook;
 using CodeNetix.Ingestion.Features.ReceiveSentryWebhook;
 using CodeNetix.Ingestion.Features.RecordLabelEvent;
@@ -29,6 +30,17 @@ public static class IngestionServiceCollectionExtensions
 
         services.TryAddSingleton(TimeProvider.System);
         services.AddSingleton<IModuleDatabase, IngestionModuleDatabase>();
+
+        // Sentry (historia 7.4): API, contexto para el Analista y fix <url-de-sentry>. Las opciones (y el mapa proyecto →
+        // repositorio de SentryWebhookOptions) las rellena Host; sin token, todo queda desactivado.
+        services.AddOptions<SentryApiOptions>();
+        services.AddOptions<SentryWebhookOptions>();
+        services.TryAddSingleton<SentryApiClient>();
+        services.TryAddSingleton<SentryEventRecorder>();
+        services.TryAddSingleton<SentryIssueLocks>();
+        services.TryAddSingleton<ISentryContextProvider, SentryContextProvider>();
+        services.TryAddSingleton<ManualSentryEventIngestion>();
+
         services.AddSingleton<IManualEventIngestion, ManualEventIngestion>();
         services.AddSingleton<IGitHubActionEventIngestion, GitHubActionEventIngestion>();
         services.TryAddSingleton<LabelEventRecorder>();

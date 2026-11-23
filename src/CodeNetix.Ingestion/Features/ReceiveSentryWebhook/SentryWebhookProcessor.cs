@@ -23,6 +23,7 @@ internal sealed partial class SentryWebhookProcessor(
     SentryWebhookIngestion ingestion,
     SentryEventRecorder recorder,
     ISentryTrackingIssues trackingIssues,
+    SentryIssueLocks locks,
     IInstanceHealth health,
     TimeProvider timeProvider,
     ILogger<SentryWebhookProcessor> logger) : BackgroundService
@@ -186,10 +187,16 @@ internal sealed partial class SentryWebhookProcessor(
             return (true, null, false, null);
         }
 
+        // Buscar o asegurar la issue de seguimiento y registrar el Evento, bajo el cerrojo de la incidencia compartido con
+        // fix <url-de-sentry> (historia 7.4): dentro se vuelve a mirar si otro (p. ej. un fix) ya la ha registrado.
+        using var _ = await locks.AcquireAsync(incident.IssueId, cancellationToken).ConfigureAwait(false);
+
         long number;
-        if (key.TrackingIssueIn(target.Owner, target.Repo) is { } previous)
+        var previous = key.TrackingIssueIn(target.Owner, target.Repo)
+            ?? await recorder.FindTrackingIssueAsync(incident.IssueId, target.Owner, target.Repo, cancellationToken).ConfigureAwait(false);
+        if (previous is { } found)
         {
-            number = previous;
+            number = found;
         }
         else
         {
