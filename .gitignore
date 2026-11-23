@@ -27,3 +27,7 @@ src/CodeNetix.Host/wwwroot/
 Thumbs.db
 .idea/
 .local/
+
+# Herramientas de planificación y agentes (solo en local)
+_bmad/
+.claude/
