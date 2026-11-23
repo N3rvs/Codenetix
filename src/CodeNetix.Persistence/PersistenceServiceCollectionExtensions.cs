@@ -1,3 +1,4 @@
+using CodeNetix.Contracts;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CodeNetix.Persistence;
@@ -5,8 +6,8 @@ namespace CodeNetix.Persistence;
 public static class PersistenceServiceCollectionExtensions
 {
     /// <summary>
-    /// Registra <see cref="SqliteDatabase"/>. Las opciones las configura Host
-    /// (solo Host lee el entorno).
+    /// Registra <see cref="SqliteDatabase"/> (también como <see cref="IDatabaseConnection"/>) y
+    /// <see cref="DatabaseMigrator"/>. Las opciones las configura Host (solo Host lee el entorno).
     /// </summary>
     public static IServiceCollection AddCodeNetixPersistence(
         this IServiceCollection services,
@@ -21,6 +22,8 @@ public static class PersistenceServiceCollectionExtensions
         }
 
         services.AddSingleton<SqliteDatabase>();
+        services.AddSingleton<IDatabaseConnection>(sp => sp.GetRequiredService<SqliteDatabase>());
+        services.AddSingleton<DatabaseMigrator>();
         return services;
     }
 }

@@ -4,8 +4,8 @@ using CodeNetix.Host.Configuration;
 namespace CodeNetix.Host.Features.GetHealth;
 
 /// <summary>
-/// <c>GET /api/health</c>. Anónimo por decisión: lo usa el <c>HEALTHCHECK</c> de la imagen
-/// y debe seguir exento del <c>admin-token</c> (historia 1.3).
+/// <c>GET /api/health</c>. Anónimo por decisión: lo usa el <c>HEALTHCHECK</c> de la imagen.
+/// <see cref="Route"/> es la única excepción de <see cref="Access.AdminTokenMiddleware"/> (historia 1.3).
 /// <c>Starting</c> → 503; <c>Ready</c> y <c>Diagnostic</c> → 200 (en diagnóstico la instancia está viva).
 /// </summary>
 internal static class GetHealthEndpoint
@@ -14,7 +14,7 @@ internal static class GetHealthEndpoint
 
     public static IEndpointRouteBuilder MapGetHealth(this IEndpointRouteBuilder endpoints)
     {
-        endpoints.MapGet(Route, (InstanceHealth health) =>
+        endpoints.MapMethods(Route, [HttpMethods.Get, HttpMethods.Head], (InstanceHealth health) =>
             {
                 var (status, reasons) = health.Read();
                 var body = new HealthResponse(status.ToString(), reasons);

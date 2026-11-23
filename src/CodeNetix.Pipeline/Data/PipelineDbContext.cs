@@ -1,0 +1,256 @@
+using CodeNetix.Contracts;
+using CodeNetix.Pipeline.Domain;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Design;
+
+namespace CodeNetix.Pipeline.Data;
+
+/// <summary>
+/// <c>DbContext</c> de Pipeline (AD-11): dueño de <c>run_runs</c>, <c>run_events</c> y <c>run_specs</c>, con su propio historial
+/// <see cref="MigrationsHistoryTable"/>. Las migraciones se generan con <c>dotnet-ef</c> y no se editan a mano.
+/// </summary>
+internal sealed class PipelineDbContext(DbContextOptions<PipelineDbContext> options) : DbContext(options)
+{
+    public const string Prefix = "run";
+    public const string MigrationsHistoryTable = "__ef_migrations_" + Prefix;
+    public const string RunsTable = Prefix + "_runs";
+    public const string EventsTable = Prefix + "_events";
+    public const string SpecsTable = Prefix + "_specs";
+    public const string TestReportsTable = Prefix + "_test_reports";
+    public const string StagesTable = Prefix + "_stages";
+    public const string VerdictsTable = Prefix + "_verdicts";
+    public const string BudgetTable = Prefix + "_budget";
+    public const string ActiveObjectKeyIndex = "ux_" + RunsTable + "_active_object_key";
+    public const string ShortIdIndex = "ux_" + RunsTable + "_short_id";
+    public const string EventIdIndex = "ux_" + RunsTable + "_event_id";
+    public const string StagesRunIndex = "ix_" + StagesTable + "_run_kind_round";
+    public const string VerdictsRunRoundReviewerIndex = "ux_" + VerdictsTable + "_run_round_reviewer";
+    public const string BudgetRunIndex = "ix_" + BudgetTable + "_run_id";
+
+    /// <summary>
+    /// Filtro del índice UNIQUE parcial: como mucho una Ejecución no terminal por objeto (AD-4).
+    /// </summary>
+    public static readonly string ActiveFilter =
+        $"state NOT IN ('{RunState.PullRequestCreated}', '{RunState.Failed}', '{RunState.Cancelled}')";
+
+    public DbSet<PipelineRun> Runs => Set<PipelineRun>();
+
+    public DbSet<RunEventRecord> Events => Set<RunEventRecord>();
+
+    public DbSet<RunSpecRecord> Specs => Set<RunSpecRecord>();
+
+    public DbSet<RunTestReportRecord> TestReports => Set<RunTestReportRecord>();
+
+    public DbSet<RunStageRecord> Stages => Set<RunStageRecord>();
+
+    public DbSet<RunVerdictRecord> Verdicts => Set<RunVerdictRecord>();
+
+    public DbSet<RunBudgetRecord> BudgetCharges => Set<RunBudgetRecord>();
+
+    /// <summary>Configura SQLite con el historial de migraciones del módulo.</summary>
+    public static void Configure(DbContextOptionsBuilder builder, string connectionString)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+        builder.UseSqlite(connectionString, sqlite => sqlite.MigrationsHistoryTable(MigrationsHistoryTable));
+    }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        var runs = modelBuilder.Entity<PipelineRun>();
+        runs.ToTable(RunsTable);
+        runs.HasKey(r => r.Id).HasName("pk_" + RunsTable);
+        runs.Property(r => r.Id).HasColumnName("id").ValueGeneratedNever();
+        runs.Property(r => r.ShortId).HasColumnName("short_id").IsRequired();
+        runs.Property(r => r.EventId).HasColumnName("event_id");
+        runs.Property(r => r.ObjectKey).HasColumnName("object_key").IsRequired();
+        runs.Property(r => r.State).HasColumnName("state").HasConversion<string>().IsRequired();
+        runs.Property(r => r.FailureReason).HasColumnName("failure_reason").HasConversion<string>();
+        runs.Property(r => r.FailureDetail).HasColumnName("failure_detail");
+        runs.Property(r => r.BaseSha).HasColumnName("base_sha");
+        runs.Property(r => r.EffectiveConfigJson).HasColumnName("effective_config_json");
+        runs.Property(r => r.CodingAttempts).HasColumnName("coding_attempts");
+        runs.Property(r => r.FailedCodingAttempts).HasColumnName("failed_coding_attempts");
+
+        // EF Sqlite no ordena ni compara DateTimeOffset guardado como TEXT: ticks UTC (INTEGER), igual que ing_events.
+        runs.Property(r => r.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        runs.Property(r => r.UpdatedAt).HasColumnName("updated_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+
+        runs.HasIndex(r => r.ShortId).IsUnique().HasDatabaseName(ShortIdIndex);
+        // Un Evento produce como mucho una Ejecución: el Dispatcher puede reintentar sin duplicar.
+        runs.HasIndex(r => r.EventId).IsUnique().HasDatabaseName(EventIdIndex);
+        runs.HasIndex(r => r.ObjectKey).IsUnique().HasFilter(ActiveFilter).HasDatabaseName(ActiveObjectKeyIndex);
+
+        var events = modelBuilder.Entity<RunEventRecord>();
+        events.ToTable(EventsTable);
+        events.HasKey(e => new { e.RunId, e.Seq }).HasName("pk_" + EventsTable);
+        events.Property(e => e.RunId).HasColumnName("run_id");
+        events.Property(e => e.Seq).HasColumnName("seq").ValueGeneratedNever();
+        events.Property(e => e.StageId).HasColumnName("stage_id");
+        events.Property(e => e.Type).HasColumnName("type").IsRequired();
+        events.Property(e => e.PayloadJson).HasColumnName("payload_json").IsRequired();
+        events.Property(e => e.At).HasColumnName("at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        events.HasOne<PipelineRun>()
+            .WithMany()
+            .HasForeignKey(e => e.RunId)
+            .HasConstraintName("fk_" + EventsTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var specs = modelBuilder.Entity<RunSpecRecord>();
+        specs.ToTable(SpecsTable);
+        specs.HasKey(s => s.RunId).HasName("pk_" + SpecsTable);
+        specs.Property(s => s.RunId).HasColumnName("run_id").ValueGeneratedNever();
+        specs.Property(s => s.SpecJson).HasColumnName("spec_json").IsRequired();
+        specs.Property(s => s.Model).HasColumnName("model").IsRequired();
+        specs.Property(s => s.Attempts).HasColumnName("attempts");
+        specs.Property(s => s.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        specs.HasOne<PipelineRun>()
+            .WithOne()
+            .HasForeignKey<RunSpecRecord>(s => s.RunId)
+            .HasConstraintName("fk_" + SpecsTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var testReports = modelBuilder.Entity<RunTestReportRecord>();
+        testReports.ToTable(TestReportsTable);
+        testReports.HasKey(t => t.RunId).HasName("pk_" + TestReportsTable);
+        testReports.Property(t => t.RunId).HasColumnName("run_id").ValueGeneratedNever();
+        testReports.Property(t => t.ReportJson).HasColumnName("report_json").IsRequired();
+        testReports.Property(t => t.Passed).HasColumnName("passed");
+        testReports.Property(t => t.TotalTests).HasColumnName("total_tests");
+        testReports.Property(t => t.FailedTests).HasColumnName("failed_tests");
+        testReports.Property(t => t.NewTestsCount).HasColumnName("new_tests_count");
+        testReports.Property(t => t.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        testReports.HasOne<PipelineRun>()
+            .WithOne()
+            .HasForeignKey<RunTestReportRecord>(t => t.RunId)
+            .HasConstraintName("fk_" + TestReportsTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var stages = modelBuilder.Entity<RunStageRecord>();
+        stages.ToTable(StagesTable);
+        stages.HasKey(s => s.Id).HasName("pk_" + StagesTable);
+        stages.Property(s => s.Id).HasColumnName("id").ValueGeneratedNever();
+        stages.Property(s => s.RunId).HasColumnName("run_id");
+        stages.Property(s => s.Kind).HasColumnName("kind").HasConversion<string>().IsRequired();
+        stages.Property(s => s.Round).HasColumnName("round");
+        stages.Property(s => s.Reviewer).HasColumnName("reviewer").HasConversion<string>();
+        stages.Property(s => s.StartedAt).HasColumnName("started_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        stages.Property(s => s.CompletedAt).HasColumnName("completed_at").HasConversion(
+            v => v.HasValue ? v.Value.UtcTicks : (long?)null,
+            v => v.HasValue ? new DateTimeOffset(v.Value, TimeSpan.Zero) : null);
+        stages.HasIndex(s => new { s.RunId, s.Kind, s.Round }).HasDatabaseName(StagesRunIndex);
+        stages.HasOne<PipelineRun>()
+            .WithMany()
+            .HasForeignKey(s => s.RunId)
+            .HasConstraintName("fk_" + StagesTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var verdicts = modelBuilder.Entity<RunVerdictRecord>();
+        verdicts.ToTable(VerdictsTable);
+        verdicts.HasKey(v => v.Id).HasName("pk_" + VerdictsTable);
+        verdicts.Property(v => v.Id).HasColumnName("id").ValueGeneratedNever();
+        verdicts.Property(v => v.RunId).HasColumnName("run_id");
+        verdicts.Property(v => v.StageId).HasColumnName("stage_id");
+        verdicts.Property(v => v.Round).HasColumnName("round");
+        verdicts.Property(v => v.Reviewer).HasColumnName("reviewer").HasConversion<string>().IsRequired();
+        verdicts.Property(v => v.Decision).HasColumnName("decision").HasConversion<string>().IsRequired();
+        verdicts.Property(v => v.Summary).HasColumnName("summary").IsRequired();
+        verdicts.Property(v => v.FindingsJson).HasColumnName("findings_json").IsRequired();
+        verdicts.Property(v => v.Model).HasColumnName("model").IsRequired();
+        verdicts.Property(v => v.Attempts).HasColumnName("attempts");
+        verdicts.Property(v => v.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        verdicts.HasIndex(v => new { v.RunId, v.Round, v.Reviewer }).IsUnique().HasDatabaseName(VerdictsRunRoundReviewerIndex);
+        verdicts.HasOne<PipelineRun>()
+            .WithMany()
+            .HasForeignKey(v => v.RunId)
+            .HasConstraintName("fk_" + VerdictsTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+        verdicts.HasOne<RunStageRecord>()
+            .WithMany()
+            .HasForeignKey(v => v.StageId)
+            .HasConstraintName("fk_" + VerdictsTable + "_" + StagesTable)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        var budget = modelBuilder.Entity<RunBudgetRecord>();
+        budget.ToTable(BudgetTable);
+        budget.HasKey(b => b.Id).HasName("pk_" + BudgetTable);
+        budget.Property(b => b.Id).HasColumnName("id").ValueGeneratedNever();
+        budget.Property(b => b.RunId).HasColumnName("run_id");
+        budget.Property(b => b.StageId).HasColumnName("stage_id");
+        budget.Property(b => b.Role).HasColumnName("role").IsRequired();
+        budget.Property(b => b.Provider).HasColumnName("provider").IsRequired();
+        budget.Property(b => b.Model).HasColumnName("model").IsRequired();
+        budget.Property(b => b.InputTokens).HasColumnName("input_tokens");
+        budget.Property(b => b.OutputTokens).HasColumnName("output_tokens");
+        budget.Property(b => b.CostUsd).HasColumnName("cost_usd");
+        budget.Property(b => b.IsPriced).HasColumnName("is_priced");
+        budget.Property(b => b.CreatedAt).HasColumnName("created_at").HasConversion(v => v.UtcTicks, v => new DateTimeOffset(v, TimeSpan.Zero));
+        budget.HasIndex(b => b.RunId).HasDatabaseName(BudgetRunIndex);
+        budget.HasOne<PipelineRun>()
+            .WithMany()
+            .HasForeignKey(b => b.RunId)
+            .HasConstraintName("fk_" + BudgetTable + "_" + RunsTable)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+/// <summary>Fila de <c>run_events</c>: un <see cref="RunEvent"/> serializado (y redactado).</summary>
+internal sealed class RunEventRecord
+{
+    public Guid RunId { get; set; }
+
+    public long Seq { get; set; }
+
+    public Guid? StageId { get; set; }
+
+    /// <summary>Discriminador de la unión (<c>RunCreated</c>, <c>StateChanged</c>, …).</summary>
+    public string Type { get; set; } = string.Empty;
+
+    public string PayloadJson { get; set; } = string.Empty;
+
+    public DateTimeOffset At { get; set; }
+}
+
+/// <summary>Fila de <c>run_specs</c>: la <see cref="Spec"/> de una Ejecución (como mucho una).</summary>
+internal sealed class RunSpecRecord
+{
+    public Guid RunId { get; set; }
+
+    /// <summary>JSON camelCase de la <see cref="Spec"/>.</summary>
+    public string SpecJson { get; set; } = string.Empty;
+
+    /// <summary>Modelo que la generó.</summary>
+    public string Model { get; set; } = string.Empty;
+
+    /// <summary>Intentos que necesitó (1 + reintentos de esquema).</summary>
+    public int Attempts { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+/// <summary>Solo para <c>dotnet-ef migrations add</c>: no se usa en tiempo de ejecución.</summary>
+internal sealed class PipelineDesignTimeDbContextFactory : IDesignTimeDbContextFactory<PipelineDbContext>
+{
+    public PipelineDbContext CreateDbContext(string[] args)
+    {
+        var builder = new DbContextOptionsBuilder<PipelineDbContext>();
+        PipelineDbContext.Configure(builder, "Data Source=design-time.db");
+        return new PipelineDbContext(builder.Options);
+    }
+}
+
+/// <summary>Registro de Pipeline ante el orquestador de migraciones de Persistence.</summary>
+internal sealed class PipelineModuleDatabase(IDbContextFactory<PipelineDbContext> contextFactory) : IModuleDatabase
+{
+    /// <summary>Después de Ingestion (<c>ing</c>, 10).</summary>
+    public const int MigrationOrder = 20;
+
+    public string Prefix => PipelineDbContext.Prefix;
+
+    public int Order => MigrationOrder;
+
+    public async Task MigrateAsync(CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
+    }
+}

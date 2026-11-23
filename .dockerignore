@@ -4,7 +4,11 @@
 **/TestResults/
 src/CodeNetix.Host/wwwroot/
 .git/
-.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/ci.yml
+!.github/workflows/release.yml
 .vs/
 .vscode/
 .idea/

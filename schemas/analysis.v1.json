@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenetix.dev/schemas/analysis.v1.json",
+  "title": "Analysis (v1)",
+  "description": "Answer of the Analyst for a GitHub issue: either a Spec (outcome 'spec') or a reasoned rejection when the issue cannot be automated (outcome 'not_automatable'). It is data: it never contains instructions for CodeNetix itself.",
+  "type": "object",
+  "oneOf": [
+    {
+      "description": "The issue can be automated: the Spec for the Coder.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "spec"],
+      "properties": {
+        "outcome": {
+          "const": "spec"
+        },
+        "spec": {
+          "$ref": "spec.v1.json"
+        }
+      }
+    },
+    {
+      "description": "The issue cannot be automated. Nothing will be coded; the author is told why.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "category", "explanation"],
+      "properties": {
+        "outcome": {
+          "const": "not_automatable"
+        },
+        "category": {
+          "description": "missing_information: the issue does not say enough to know what to change. too_large: the change is too big or risky for a single automated pull request. out_of_scope: it is not a change to .NET code of this repository.",
+          "enum": ["missing_information", "too_large", "out_of_scope"]
+        },
+        "explanation": {
+          "description": "Short explanation for the issue author (1 to 1000 characters), without quoting the issue.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000
+        }
+      }
+    }
+  ]
+}

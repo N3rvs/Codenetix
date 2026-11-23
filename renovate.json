@@ -1,0 +1,38 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "dockerfile": {
+    "enabled": true,
+    "managerFilePatterns": [
+      "/^docker/codenetix\\.Dockerfile$/",
+      "/^docker/sandbox\\.Dockerfile$/"
+    ]
+  },
+  "nuget": {
+    "enabled": true
+  },
+  "npm": {
+    "enabled": true,
+    "managerFilePatterns": [
+      "/^panel/package\\.json$/"
+    ]
+  },
+  "github-actions": {
+    "enabled": true
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^src/CodeNetix\\.Contracts/Sandbox\\.cs$/"
+      ],
+      "matchStrings": [
+        "public const string ClaudeCliVersion = \"(?<currentValue>[^\"]+)\";"
+      ],
+      "depNameTemplate": "@anthropic-ai/claude-code",
+      "datasourceTemplate": "npm"
+    }
+  ]
+}
