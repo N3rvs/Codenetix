@@ -87,7 +87,7 @@ development_status:
 
   epic-7: in-progress
   7-1-sondeo-de-issues-etiquetadas: done
-  7-2-webhooks-de-github: backlog
+  7-2-webhooks-de-github: done
   7-3-sentry-webhooks-y-correspondencia-con-el-repositorio: backlog
   7-4-contexto-de-sentry-para-el-analista: backlog
   epic-7-retrospective: optional

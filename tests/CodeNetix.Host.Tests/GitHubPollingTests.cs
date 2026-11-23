@@ -600,7 +600,7 @@ public sealed class GitHubPollingTests : IAsyncLifetime
         var logger = new ListLogger<GitHubPoller>();
         var options = new GitHubPollingOptions();
         options.Repositories.Add(new PolledRepository("o", "r"));
-        using var poller = new GitHubPoller(Options.Create(options), source, null!, null!, null!, TimeProvider.System, logger);
+        using var poller = new GitHubPoller(Options.Create(options), source, null!, logger);
 
         source.Issues = [new LabeledIssue(12, "a")];
         source.Truncated = true;

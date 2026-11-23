@@ -116,7 +116,7 @@ internal sealed class LabeledIssueSource(GitHubApiClient client) : ILabeledIssue
             var first = await client.GetAsync($"{basePath}&page=1", cancellationToken).ConfigureAwait(false);
             if (first.Status is HttpStatusCode.NotFound or HttpStatusCode.Gone)
             {
-                return LabelEventLookup.NotFound;
+                return LabelEventLookup.IssueNotFound;
             }
 
             if (!IsPage(first, out var failure))

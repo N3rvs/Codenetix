@@ -2,6 +2,8 @@ using CodeNetix.Contracts;
 using CodeNetix.Ingestion.Data;
 using CodeNetix.Ingestion.Features.DispatchEvents;
 using CodeNetix.Ingestion.Features.PollGitHub;
+using CodeNetix.Ingestion.Features.ReceiveGitHubWebhook;
+using CodeNetix.Ingestion.Features.RecordLabelEvent;
 using CodeNetix.Ingestion.Features.SubmitGitHubActionEvent;
 using CodeNetix.Ingestion.Features.SubmitManualEvent;
 using Microsoft.EntityFrameworkCore;
@@ -28,6 +30,7 @@ public static class IngestionServiceCollectionExtensions
         services.AddSingleton<IModuleDatabase, IngestionModuleDatabase>();
         services.AddSingleton<IManualEventIngestion, ManualEventIngestion>();
         services.AddSingleton<IGitHubActionEventIngestion, GitHubActionEventIngestion>();
+        services.TryAddSingleton<LabelEventRecorder>();
         services.AddSingleton<AcceptedEventSource>();
         services.AddSingleton<IAcceptedEventSource>(sp => sp.GetRequiredService<AcceptedEventSource>());
         services.AddSingleton<IEventReader>(sp => sp.GetRequiredService<AcceptedEventSource>());
@@ -47,6 +50,23 @@ public static class IngestionServiceCollectionExtensions
         services.TryAddSingleton<GitHubPoller>();
         services.TryAddSingleton<IGitHubPollCycle>(sp => sp.GetRequiredService<GitHubPoller>());
         services.AddHostedService<GitHubPollingService>();
+        return services;
+    }
+
+    /// <summary>
+    /// Registra el webhook de GitHub (FR-7): <see cref="GitHubWebhookOptions"/> (las rellena Host),
+    /// <see cref="IGitHubWebhookIngestion"/> (firma, filtro y cola) y el <c>BackgroundService</c> que procesa la cola. Solo
+    /// para <c>serve</c>; necesita <see cref="ILabeledIssueSource"/> (módulo GitHub) e <see cref="IInstanceHealth"/> (Host).
+    /// </summary>
+    public static IServiceCollection AddCodeNetixGitHubWebhooks(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddOptions<GitHubWebhookOptions>();
+        services.TryAddSingleton<GitHubWebhookIngestion>();
+        services.TryAddSingleton<IGitHubWebhookIngestion>(sp => sp.GetRequiredService<GitHubWebhookIngestion>());
+        services.TryAddSingleton<GitHubWebhookProcessor>();
+        services.AddHostedService(sp => sp.GetRequiredService<GitHubWebhookProcessor>());
         return services;
     }
 }

@@ -108,20 +108,23 @@ public sealed partial class ActionModeTests : IDisposable
         Assert.Equal(["http://+:8080"], ActionMode.ListenUrls(configuration));
     }
 
-    // --- Historia 7.1: el sondeo es solo de serve ---
+    // --- Historias 7.1 y 7.2: el sondeo y el webhook de GitHub son solo de serve ---
 
     [Fact]
-    public async Task Action_mode_never_registers_the_GitHub_poller_even_with_polling_repositories()
+    public async Task Action_mode_never_registers_the_GitHub_poller_nor_the_webhook_even_when_configured()
     {
         await using var gitHub = await FakeGitHub.StartAsync(Ct);
         var harness = new Harness(gitHub);
         var env = Environment(gitHub);
         env["CODENETIX:Polling:Repositories"] = "o/r";
+        env["CODENETIX:GitHub:WebhookSecret"] = "webhook-secret-0123456789";
         var registered = true;
 
         var exitCode = await RunAsync(env, harness, configureBuilder: builder =>
             registered = builder.Services.Any(d => d.ImplementationType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPollingService)
-                || d.ServiceType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPoller)));
+                || d.ServiceType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPoller)
+                || d.ServiceType == typeof(CodeNetix.Ingestion.Features.ReceiveGitHubWebhook.GitHubWebhookProcessor)
+                || d.ServiceType == typeof(IGitHubWebhookIngestion)));
 
         Assert.True(exitCode == CodeNetixCommandLine.ExitOk, Stdout + Stderr);
         Assert.False(registered);

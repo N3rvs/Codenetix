@@ -61,7 +61,8 @@ public sealed class GitHubModuleTests : IAsyncLifetime
 
         var access = await new RepositoryPermissions(client).GetWriteAccessAsync("o", "r", "bot", Ct);
 
-        Assert.Equal(new WriteAccess(expected, reason), access);
+        // 7.2: un rate limit además lo marca, para que quien pregunta no reintente enseguida.
+        Assert.Equal(new WriteAccess(expected, reason) { RateLimited = status == 429 }, access);
     }
 
     [Fact]
@@ -95,7 +96,7 @@ public sealed class GitHubModuleTests : IAsyncLifetime
         var access = await new RepositoryPermissions(client).GetWriteAccessAsync("o", "r", "bot", Ct);
         var ex = await Assert.ThrowsAsync<GitHubUnavailableException>(() => new GitHubIdentity(client).GetLoginAsync(Ct));
 
-        Assert.Equal(WriteAccess.Unavailable(GitHubApiClient.RateLimitedReason), access);
+        Assert.Equal(WriteAccess.Unavailable(GitHubApiClient.RateLimitedReason) with { RateLimited = true }, access);
         Assert.Equal(GitHubApiClient.RateLimitedReason, ex.Message);
     }
 

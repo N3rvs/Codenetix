@@ -314,10 +314,16 @@ public sealed class AccessTests : IDisposable
         _ = factory.Server;
         await WaitForStatusAsync(factory, "Ready");
 
-        var context = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/github");
+        var context = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/sentry");
 
         Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
         Assert.Contains(ReceiveWebhookEndpoint.SourceNotAvailableTitle, await ReadBodyAsync(context), StringComparison.Ordinal);
+
+        // GitHub (7.2) sin CODENETIX__GitHub__WebhookSecret: desactivado, 404 y nunca 401.
+        var gitHub = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/github");
+
+        Assert.Equal(StatusCodes.Status404NotFound, gitHub.Response.StatusCode);
+        Assert.Contains(ReceiveWebhookEndpoint.GitHubNotConfiguredTitle, await ReadBodyAsync(gitHub), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -405,7 +411,9 @@ public sealed class AccessTests : IDisposable
         var context = await SendAsync(factory, port, HttpMethods.Post, "/webhooks/github", CodeNetixFactory.TestAccessToken);
 
         Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
-        Assert.DoesNotContain(ReceiveWebhookEndpoint.SourceNotAvailableTitle, await ReadBodyAsync(context), StringComparison.Ordinal);
+        var body = await ReadBodyAsync(context);
+        Assert.DoesNotContain(ReceiveWebhookEndpoint.SourceNotAvailableTitle, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(ReceiveWebhookEndpoint.GitHubNotConfiguredTitle, body, StringComparison.Ordinal);
     }
 
     [Fact]

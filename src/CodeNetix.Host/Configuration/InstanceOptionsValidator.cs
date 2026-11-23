@@ -51,6 +51,15 @@ internal static class InstanceOptionsValidator
     public const string InvalidPollingInterval =
         "CODENETIX__Polling__IntervalSeconds debe ser un entero entre 60 y 86400 (por defecto 300).";
 
+    public const string InvalidWebhookSecret =
+        "CODENETIX__GitHub__WebhookSecret debe tener al menos 16 caracteres y ninguno de control (o no definirse para desactivar el webhook de GitHub).";
+
+    public const string InvalidWebhookRepository =
+        "CODENETIX__GitHub__WebhookRepositories debe ser una lista de repositorios owner/repo separados por comas (o CODENETIX__GitHub__WebhookRepositories__0, __1…); hay al menos un elemento que no lo es.";
+
+    public const string TooManyWebhookRepositories =
+        "CODENETIX__GitHub__WebhookRepositories admite como mucho 100 repositorios.";
+
     public static IReadOnlyList<string> Validate(InstanceOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -165,22 +174,39 @@ internal static class InstanceOptionsValidator
         }
 
         ValidatePolling(options.Polling ?? new PollingInstanceOptions(), reasons);
+        ValidateWebhook(options.GitHub ?? new GitHubInstanceOptions(), reasons);
 
         return reasons;
     }
 
-    private static void ValidatePolling(PollingInstanceOptions polling, List<string> reasons)
+    private static void ValidateWebhook(GitHubInstanceOptions gitHub, List<string> reasons)
     {
-        var repositories = polling.Repositories ?? [];
+        if (gitHub.EffectiveWebhookSecret is { } secret
+            && (secret.Length < GitHubInstanceOptions.MinWebhookSecretLength || secret.Any(char.IsControl)))
+        {
+            reasons.Add(InvalidWebhookSecret);
+        }
+
+        ValidateRepositories(gitHub.WebhookRepositories, InvalidWebhookRepository, TooManyWebhookRepositories, reasons);
+    }
+
+    private static void ValidateRepositories(List<string>? repositories, string invalid, string tooMany, List<string> reasons)
+    {
+        repositories ??= [];
         if (repositories.Any(r => !PollingInstanceOptions.TryParseRepository(r, out _, out _)))
         {
-            reasons.Add(InvalidPollingRepository);
+            reasons.Add(invalid);
         }
 
         if (repositories.Select(r => r.Trim().ToLowerInvariant()).Distinct(StringComparer.Ordinal).Count() > PollingInstanceOptions.MaxRepositories)
         {
-            reasons.Add(TooManyPollingRepositories);
+            reasons.Add(tooMany);
         }
+    }
+
+    private static void ValidatePolling(PollingInstanceOptions polling, List<string> reasons)
+    {
+        ValidateRepositories(polling.Repositories, InvalidPollingRepository, TooManyPollingRepositories, reasons);
 
         if (polling.Label is { } label && !string.IsNullOrWhiteSpace(label))
         {

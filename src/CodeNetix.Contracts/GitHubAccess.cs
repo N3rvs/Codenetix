@@ -41,6 +41,9 @@ public sealed record WriteAccess(WriteAccessStatus Status, string? Reason)
 
     public static readonly WriteAccess Denied = new(WriteAccessStatus.Denied, null);
 
+    /// <summary>Solo en <c>Unavailable</c>: GitHub limitó las peticiones (rate limit); reintentar enseguida no sirve.</summary>
+    public bool RateLimited { get; init; }
+
     public static WriteAccess Unavailable(string reason) => new(WriteAccessStatus.Unavailable, reason);
 }
 
