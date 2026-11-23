@@ -1,0 +1,188 @@
+name: 'CodeNetix'
+description: 'Convierte issues etiquetadas de GitHub en Pull Requests revisados dentro de un Sandbox Docker aislado.'
+branding:
+  icon: 'git-pull-request'
+  color: 'blue'
+
+inputs:
+  version:
+    description: 'Etiqueta semver de las imágenes ghcr.io/n3rvs/codenetix:<tag> y ghcr.io/n3rvs/codenetix-sandbox:<tag> (nunca latest).'
+    required: false
+    default: 'v0.1.0'
+  github-token:
+    description: 'Token de GitHub con permisos de escritura en contents, pull-requests e issues.'
+    required: false
+    default: ${{ github.token }}
+  anthropic-api-key:
+    description: 'API key de Anthropic para los agentes de CodeNetix.'
+    required: false
+    default: ''
+  openai-api-key:
+    description: 'API key de OpenAI para los agentes de CodeNetix.'
+    required: false
+    default: ''
+  label:
+    description: 'Etiqueta de issue que activa CodeNetix.'
+    required: false
+    default: 'codenetix'
+  budget-usd:
+    description: 'Límite máximo de presupuesto por Ejecución en USD (opcional).'
+    required: false
+    default: ''
+  image:
+    description: 'Override opcional de la imagen principal de CodeNetix.'
+    required: false
+    default: ''
+  sandbox-image:
+    description: 'Override opcional de la imagen del Sandbox Docker.'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Run CodeNetix
+      shell: bash
+      env:
+        INPUT_VERSION: ${{ inputs.version }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        CODENETIX__Providers__Anthropic__ApiKey: ${{ inputs.anthropic-api-key }}
+        CODENETIX__Providers__OpenAI__ApiKey: ${{ inputs.openai-api-key }}
+        CODENETIX__Action__Label: ${{ inputs.label }}
+        CODENETIX__Limits__BudgetUsd: ${{ inputs.budget-usd }}
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_SANDBOX_IMAGE: ${{ inputs.sandbox-image }}
+      run: |
+        set -euo pipefail
+
+        validate_image_ref() {
+          local label="$1"
+          local ref="$2"
+          if [ -z "$ref" ]; then
+            echo "Error: la referencia de imagen '$label' no puede estar vacía." >&2
+            exit 2
+          fi
+          if [[ "$ref" == -* ]]; then
+            echo "Error: la referencia de imagen '$label' ('$ref') no puede empezar por '-'." >&2
+            exit 2
+          fi
+          if [[ ! "$ref" =~ ^[A-Za-z0-9._/@:-]+$ ]]; then
+            echo "Error: la referencia de imagen '$label' ('$ref') contiene caracteres no permitidos." >&2
+            exit 2
+          fi
+          local ref_lower
+          ref_lower="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$ref_lower" == *:latest ]]; then
+            echo "Error: la referencia de imagen '$label' ('$ref') no puede usar la etiqueta ':latest'." >&2
+            exit 2
+          fi
+        }
+
+        if [ ! -S /var/run/docker.sock ]; then
+          echo "Error: /var/run/docker.sock no existe. CodeNetix requiere un runner ubuntu-* con Docker." >&2
+          exit 1
+        fi
+
+        if [ -z "${GITHUB_EVENT_PATH:-}" ] || [ ! -f "$GITHUB_EVENT_PATH" ] || [ ! -r "$GITHUB_EVENT_PATH" ]; then
+          echo "Error: GITHUB_EVENT_PATH no está definido o no es un archivo legible." >&2
+          exit 2
+        fi
+
+        if [ -z "${INPUT_IMAGE:-}" ] || [ -z "${INPUT_SANDBOX_IMAGE:-}" ]; then
+          VERSION_LOWER="$(printf '%s' "${INPUT_VERSION:-}" | tr '[:upper:]' '[:lower:]')"
+          if [ "$VERSION_LOWER" = "latest" ]; then
+            echo "Error: el input 'version' no puede ser 'latest'; especifica una etiqueta semver (p. ej. v0.1.0)." >&2
+            exit 2
+          fi
+          if [[ ! "${INPUT_VERSION:-}" =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Error: el input 'version' ('${INPUT_VERSION:-}') no es una etiqueta semver válida." >&2
+            exit 2
+          fi
+        fi
+
+        CODENETIX_IMAGE="${INPUT_IMAGE:-ghcr.io/n3rvs/codenetix:${INPUT_VERSION}}"
+        CODENETIX__Sandbox__Image="${INPUT_SANDBOX_IMAGE:-ghcr.io/n3rvs/codenetix-sandbox:${INPUT_VERSION}}"
+        validate_image_ref "image" "$CODENETIX_IMAGE"
+        validate_image_ref "sandbox-image" "$CODENETIX__Sandbox__Image"
+        export CODENETIX__Sandbox__Image
+
+        EVENT_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/codenetix-event.XXXXXX")"
+        chmod 0700 "$EVENT_DIR"
+        cleanup_tmp() {
+          rm -rf "$EVENT_DIR"
+        }
+        trap cleanup_tmp EXIT
+        cp "$GITHUB_EVENT_PATH" "$EVENT_DIR/event.json"
+        chmod 0444 "$EVENT_DIR/event.json"
+
+        if ! docker image inspect "$CODENETIX_IMAGE" >/dev/null 2>&1; then
+          docker pull "$CODENETIX_IMAGE"
+        fi
+
+        if ! docker image inspect "$CODENETIX__Sandbox__Image" >/dev/null 2>&1; then
+          docker pull "$CODENETIX__Sandbox__Image"
+        fi
+
+        DOCKER_GID="$(stat -L -c '%g' /var/run/docker.sock)"
+        RUN_ID_SAFE="$(printf '%s' "${GITHUB_RUN_ID:-local}" | tr -cd '0-9A-Za-z_.-')"
+        RUN_ATTEMPT_SAFE="$(printf '%s' "${GITHUB_RUN_ATTEMPT:-1}" | tr -cd '0-9A-Za-z_.-')"
+        CONTAINER_NAME="codenetix-action-${RUN_ID_SAFE:-local}-${RUN_ATTEMPT_SAFE:-1}-$$"
+        CODENETIX__Sandbox__HostContainer="$CONTAINER_NAME"
+        export CODENETIX__Sandbox__HostContainer
+
+        DOCKER_ARGS=(
+          --rm
+          --no-healthcheck
+          --name "$CONTAINER_NAME"
+          --group-add "$DOCKER_GID"
+          -v /var/run/docker.sock:/var/run/docker.sock
+          -v "${EVENT_DIR}/event.json:/run/codenetix-event.json:ro"
+          -e GITHUB_EVENT_NAME
+          -e GITHUB_EVENT_PATH=/run/codenetix-event.json
+          -e GITHUB_REPOSITORY
+          -e GITHUB_RUN_ID
+          -e GITHUB_RUN_ATTEMPT
+          -e GITHUB_ACTIONS
+          -e GITHUB_API_URL
+          -e GITHUB_SERVER_URL
+          -e GITHUB_TOKEN
+          -e CODENETIX__Action__Label
+          -e CODENETIX__Sandbox__Image
+          -e CODENETIX__Sandbox__HostContainer
+        )
+
+        if [ -n "${CODENETIX__Providers__Anthropic__ApiKey:-}" ]; then
+          DOCKER_ARGS+=(-e CODENETIX__Providers__Anthropic__ApiKey)
+        fi
+
+        if [ -n "${CODENETIX__Providers__OpenAI__ApiKey:-}" ]; then
+          DOCKER_ARGS+=(-e CODENETIX__Providers__OpenAI__ApiKey)
+        fi
+
+        if [ -n "${CODENETIX__Limits__BudgetUsd:-}" ]; then
+          DOCKER_ARGS+=(-e CODENETIX__Limits__BudgetUsd)
+        fi
+
+        CHILD_PID=""
+        on_signal() {
+          local code="$1"
+          trap - SIGINT SIGTERM
+          docker stop -t 7 "$CONTAINER_NAME" >/dev/null 2>&1 || true
+          if [ -n "$CHILD_PID" ]; then
+            kill -TERM "$CHILD_PID" >/dev/null 2>&1 || true
+            wait "$CHILD_PID" >/dev/null 2>&1 || true
+          fi
+          exit "$code"
+        }
+        trap 'on_signal 130' SIGINT
+        trap 'on_signal 143' SIGTERM
+
+        docker run "${DOCKER_ARGS[@]}" "$CODENETIX_IMAGE" action &
+        CHILD_PID=$!
+
+        set +e
+        wait "$CHILD_PID"
+        EXIT_CODE=$?
+        set -e
+
+        exit "$EXIT_CODE"

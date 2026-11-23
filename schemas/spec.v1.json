@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codenetix.dev/schemas/spec.v1.json",
+  "title": "Spec (v1)",
+  "description": "Technical specification produced by the Analyst from a GitHub issue. It is data for the Coder: it never contains instructions for CodeNetix itself.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["problem", "probableCause", "proposedChange", "acceptanceCriteria", "affectedFiles"],
+  "properties": {
+    "problem": {
+      "description": "What is wrong or missing, in a few sentences.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16000
+    },
+    "probableCause": {
+      "description": "The most likely cause in the code base.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16000
+    },
+    "proposedChange": {
+      "description": "The code change that solves the problem.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16000
+    },
+    "acceptanceCriteria": {
+      "description": "Verifiable acceptance criteria (1 to 20).",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 20,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      }
+    },
+    "affectedFiles": {
+      "description": "Files the change is expected to touch (0 to 50), as paths relative to the repository root, using '/' and without '..'.",
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 300
+      }
+    }
+  }
+}

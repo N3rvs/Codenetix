@@ -12,7 +12,13 @@ internal static class CodeNetixCommandLine
         Uso: codenetix <modo>
 
         Modos:
-          serve         Arranca CodeNetix (Panel y API en http://localhost:5000).
+          serve         Arranca CodeNetix (Panel y API en http://localhost:5000; webhooks en :5001).
+          fix <url>     Lanza trabajo sobre una issue de GitHub (https://github.com/<owner>/<repo>/issues/<número>).
+                        Se ejecuta dentro del contenedor: docker exec codenetix codenetix fix <url>
+                        Con --follow muestra el Estado y los eventos de la Ejecución hasta que termina.
+          action        Ejecuta la factoría dentro de un job de GitHub Actions al etiquetar una issue (codenetix),
+                        sin Panel y con SQLite temporal; vuelca los eventos de la Ejecución a la salida estándar.
+                        Sale con 0 (PR creado o nada que hacer), 1 (Ejecución fallida, no autorizado o error) o 2 (uso).
         """;
 
     public static async Task<int> RunAsync(string[] args)
@@ -29,6 +35,8 @@ internal static class CodeNetixCommandLine
         return mode switch
         {
             "serve" => await ServeAsync(args[1..]),
+            "fix" => await FixMode.RunAsync(args[1..]),
+            "action" => await ActionAsync(args[1..]),
             "healthcheck" => await HealthcheckMode.RunAsync(),
             _ => WriteUsage(mode),
         };
@@ -48,6 +56,20 @@ internal static class CodeNetixCommandLine
         {
             // Aún no hay configuración ni sumidero de logs: solo se enmascaran los patrones de keys.
             var message = new Secrets.SecretRedactor([]).Redact($"CodeNetix no ha podido arrancar: {ex.Message}");
+            await Console.Error.WriteLineAsync(message);
+            return ExitFailure;
+        }
+    }
+
+    private static async Task<int> ActionAsync(string[] args)
+    {
+        try
+        {
+            return await ActionMode.RunAsync(args);
+        }
+        catch (Exception ex)
+        {
+            var message = new Secrets.SecretRedactor([]).Redact($"codenetix action ha fallado: {ex.Message}");
             await Console.Error.WriteLineAsync(message);
             return ExitFailure;
         }

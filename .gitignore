@@ -26,3 +26,4 @@ src/CodeNetix.Host/wwwroot/
 .DS_Store
 Thumbs.db
 .idea/
+.local/

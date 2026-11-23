@@ -72,7 +72,7 @@ public sealed class ServeTests : IDisposable
     public async Task Unknown_api_route_returns_404_not_index(string path)
     {
         await using var factory = new CodeNetixFactory(_dataDirectory, _webRoot);
-        using var client = factory.CreateClient();
+        using var client = factory.CreateAuthorizedClient();
 
         using var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
 

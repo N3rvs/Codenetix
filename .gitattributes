@@ -1,0 +1,7 @@
+# Estadísticas de lenguaje en GitHub: el producto es C# y TypeScript.
+# Las herramientas de planificación (BMAD) y las skills de agentes no cuentan.
+_bmad/** linguist-vendored
+.claude/** linguist-vendored
+_bmad-output/** linguist-documentation
+panel/src/api/generated.ts linguist-generated
+panel/openapi/** linguist-generated

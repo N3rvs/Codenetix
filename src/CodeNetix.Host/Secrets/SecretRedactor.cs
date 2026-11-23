@@ -18,7 +18,7 @@ internal sealed partial class SecretRedactor : ISecretRedactor
 
     private static readonly HashSet<string> SecretKeyNames = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ApiKey", "Token", "AuthToken", "AccessToken", "Secret", "WebhookSecret", "Password",
+        "ApiKey", "Token", "AuthToken", "AccessToken", "Secret", "WebhookSecret", "Password", "GITHUB_TOKEN",
     };
 
     /// <summary>Pares (texto a buscar, máscara), del más largo al más corto.</summary>
@@ -64,7 +64,9 @@ internal sealed partial class SecretRedactor : ISecretRedactor
             return value;
         }
 
-        var result = value;
+        // Redactar completamente cualquier access_token en query strings antes de enmascarar secretos conocidos,
+        // para no dejar visibles ni siquiera los últimos 4 caracteres ni depender del prefijo cnx_.
+        var result = AccessTokenQueryPattern().Replace(value, "$1***");
         foreach (var (secret, mask) in _knownSecrets)
         {
             if (result.Contains(secret, StringComparison.Ordinal))
@@ -105,8 +107,12 @@ internal sealed partial class SecretRedactor : ISecretRedactor
         }
     }
 
-    // sk-ant-…, sk-… (Anthropic, OpenAI y compatibles), ghp_/gho_/ghu_/ghs_/ghr_… y github_pat_… (GitHub).
-    // Longitud mínima para no tocar palabras corrientes como "sk-learn".
-    [GeneratedRegex(@"(?<![A-Za-z0-9_\-])(?:sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,})", RegexOptions.CultureInvariant)]
+    // Parámetro de consulta access_token (p. ej. WebSocket/SSE de SignalR en /hubs/**): se oculta por completo.
+    [GeneratedRegex(@"([?&]access_token=)[^&\s""'<>]+", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex AccessTokenQueryPattern();
+
+    // sk-ant-…, sk-… (Anthropic, OpenAI y compatibles), ghp_/gho_/ghu_/ghs_/ghr_… y github_pat_… (GitHub),
+    // cnx_… (admin-token de CodeNetix). Longitud mínima para no tocar palabras corrientes como "sk-learn".
+    [GeneratedRegex(@"(?<![A-Za-z0-9_\-])(?:sk-[A-Za-z0-9_\-]{16,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}|cnx_[A-Za-z0-9_\-]{20,})", RegexOptions.CultureInvariant)]
     private static partial Regex KnownKeyPattern();
 }
