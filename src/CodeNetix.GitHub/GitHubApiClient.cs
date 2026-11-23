@@ -41,7 +41,9 @@ internal sealed class GitHubApiClient : IDisposable
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     private readonly HttpClient _http;
-    private readonly GitHubOptions _options;
+
+    // Se lee en cada petición (no se copia el valor): en serve el token se puede cambiar desde el Panel (historia 8.1).
+    private readonly IOptions<GitHubOptions> _options;
     private readonly GitSafetyGuard _safetyGuard;
 
     public GitHubApiClient(IOptions<GitHubOptions> options)
@@ -64,7 +66,7 @@ internal sealed class GitHubApiClient : IDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(safetyGuard);
-        _options = options.Value;
+        _options = options;
         _safetyGuard = safetyGuard;
         _http = new HttpClient(new SocketsHttpHandler
         {
@@ -108,13 +110,14 @@ internal sealed class GitHubApiClient : IDisposable
             _safetyGuard.EnsureMergeForbidden("github api merge", relativePath);
         }
 
-        var token = _options.Token?.Trim();
+        var settings = _options.Value;
+        var token = settings.Token?.Trim();
         if (string.IsNullOrEmpty(token))
         {
             throw new GitHubUnavailableException(InvalidTokenReason);
         }
 
-        var apiUrl = string.IsNullOrWhiteSpace(_options.ApiUrl) ? GitHubOptions.DefaultApiUrl : _options.ApiUrl.Trim();
+        var apiUrl = string.IsNullOrWhiteSpace(settings.ApiUrl) ? GitHubOptions.DefaultApiUrl : settings.ApiUrl.Trim();
         if (!Uri.TryCreate(apiUrl.EndsWith('/') ? apiUrl : apiUrl + "/", UriKind.Absolute, out var baseUri)
             || (baseUri.Scheme != Uri.UriSchemeHttps && baseUri.Scheme != Uri.UriSchemeHttp))
         {

@@ -181,19 +181,10 @@ internal static class AgentEndpointResolver
         var provider = entry.Value;
         var reasons = new List<string>();
 
-        var rawBaseUrl = string.IsNullOrWhiteSpace(provider.BaseUrl) ? DefaultBaseUrl(name) : provider.BaseUrl.Trim();
-        Uri? baseUrl = null;
-        if (rawBaseUrl is null)
+        var baseUrl = ResolveBaseUrl(name, provider, out var baseUrlReason);
+        if (baseUrlReason is not null)
         {
-            reasons.Add($"Falta la URL del Proveedor '{name}': define CODENETIX__Providers__{name}__BaseUrl (una API compatible con OpenAI, p. ej. http://localhost:11434/v1/).");
-        }
-        else if (!Uri.TryCreate(rawBaseUrl.EndsWith('/') ? rawBaseUrl : rawBaseUrl + "/", UriKind.Absolute, out baseUrl)
-            || (baseUrl.Scheme != Uri.UriSchemeHttps && baseUrl.Scheme != Uri.UriSchemeHttp)
-            || !string.IsNullOrEmpty(baseUrl.UserInfo)
-            || !string.IsNullOrEmpty(baseUrl.Query))
-        {
-            baseUrl = null;
-            reasons.Add($"CODENETIX__Providers__{name}__BaseUrl no es una URL http(s) válida (sin credenciales ni parámetros).");
+            reasons.Add(baseUrlReason);
         }
 
         var model = string.IsNullOrWhiteSpace(role.Model) ? DefaultModel(name) ?? fallbackModel : role.Model.Trim();
@@ -209,6 +200,37 @@ internal static class AgentEndpointResolver
 
         var structuredOutput = provider.StructuredOutput ?? IsKnown(name);
         return (new AgentEndpoint(name, baseUrl, provider.ApiKey!.Trim(), model, structuredOutput), []);
+    }
+
+    /// <summary>
+    /// URL base efectiva del Proveedor <paramref name="name"/> (<c>CODENETIX__Providers__&lt;Nombre&gt;__BaseUrl</c> o la de
+    /// Anthropic/OpenAI), terminada en <c>/</c>; <c>null</c> con el motivo si falta o no es válida. La usa también la
+    /// validación de keys del Panel (historia 8.1), que llama al mismo host que usarán los agentes.
+    /// </summary>
+    public static Uri? ResolveBaseUrl(string name, ProviderInstanceOptions? provider, out string? reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        reason = null;
+        var rawBaseUrl = provider?.BaseUrl is { } configured && !string.IsNullOrWhiteSpace(configured)
+            ? configured.Trim()
+            : DefaultBaseUrl(name);
+        if (rawBaseUrl is null)
+        {
+            reason = $"Falta la URL del Proveedor '{name}': define CODENETIX__Providers__{name}__BaseUrl (una API compatible con OpenAI, p. ej. http://localhost:11434/v1/).";
+            return null;
+        }
+
+        if (!Uri.TryCreate(rawBaseUrl.EndsWith('/') ? rawBaseUrl : rawBaseUrl + "/", UriKind.Absolute, out var baseUrl)
+            || (baseUrl.Scheme != Uri.UriSchemeHttps && baseUrl.Scheme != Uri.UriSchemeHttp)
+            || !string.IsNullOrEmpty(baseUrl.UserInfo)
+            || !string.IsNullOrEmpty(baseUrl.Query))
+        {
+            reason = $"CODENETIX__Providers__{name}__BaseUrl no es una URL http(s) válida (sin credenciales ni parámetros).";
+            return null;
+        }
+
+        return baseUrl;
     }
 
     private static bool IsKnown(string name) =>

@@ -127,6 +127,10 @@ Cualquiera puede usar CodeNetix sin servidor y descargar imágenes firmadas. Inc
 Las issues etiquetadas y los errores de Sentry llegan solos, sin lanzar nada a mano.
 **FRs cubiertos:** FR6, FR7, FR8 · **Prioridad:** P1 (después de la preview)
 
+### Épica 8: Experiencia de configuración
+Quien no es DevOps configura y mantiene CodeNetix desde el Panel, sin variables de entorno ni reinicios, sin perder la seguridad de los secretos.
+**FRs cubiertos:** FR2 (ampliado: claves también desde el Panel), FR4 · **Prioridad:** P1
+
 ## Epic 1: Instalar y obtener una Spec
 
 El usuario arranca CodeNetix con un único comando, lanza `codenetix fix <issue>` y obtiene una Spec técnica de su issue, con configuración segura, modo diagnóstico y control de quién puede activarlo.
@@ -776,3 +780,23 @@ para que la Spec apunte a la causa real.
 **Cuando** se analiza un Evento de Sentry
 **Entonces** el Analista recibe la traza, el contexto y la frecuencia del error como `UntrustedText`
 **Y** `codenetix fix <url-de-sentry>` deja de responder "próximamente" y crea el Evento (FR5)
+
+## Epic 8: Experiencia de configuración
+
+Quien no es DevOps configura y mantiene CodeNetix desde el Panel, sin variables de entorno ni reinicios, sin perder la seguridad de los secretos.
+
+### Story 8.1: Configuración de claves desde el Panel
+
+Como usuario que no es DevOps,
+quiero pegar el token de GitHub y la key del Proveedor en el Panel,
+para empezar a usar CodeNetix (y renovar las claves) sin variables de entorno ni reinicios.
+
+**Criterios de aceptación:**
+
+**Dado** una instancia en `Diagnostic` porque faltan claves
+**Cuando** el usuario entra con el `admin-token`, pega un token de GitHub y una key de Anthropic válidos y pulsa "Probar y guardar"
+**Entonces** CodeNetix comprueba cada clave contra el servicio real, las guarda cifradas en `/data` y pasa a `Ready` sin reiniciar (FR2)
+**Y** una clave inválida se rechaza con un mensaje claro en español y no se guarda nada
+**Y** una clave definida por variable de entorno o por el archivo de instancia tiene prioridad y aparece como de solo lectura
+**Y** el botón "Configuración" permite rotarlas después; las Ejecuciones nuevas, GitHub y el Egress Gateway usan la clave nueva
+**Y** las claves nunca se devuelven por la API, ni aparecen en logs ni en `RunEvent`; los endpoints exigen `admin-token` y solo existen en `:5000` (FR4, AD-13, AD-17)

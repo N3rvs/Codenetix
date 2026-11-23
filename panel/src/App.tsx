@@ -33,6 +33,7 @@ import {
 import { LiveTerminal } from './components/LiveTerminal'
 import { LaunchWorkModal } from './components/LaunchWorkModal'
 import { RunHistoryView } from './components/RunHistoryView'
+import { healthFromSettings, SecretsSettings } from './components/SecretsSettings'
 import { formatCostDisplay } from './history/runMetrics'
 import { selectDefaultNodeId, type TerminalScopeMode } from './terminal/stageOutput'
 
@@ -152,9 +153,12 @@ function formatTime(iso: string): string {
 
 function TokenGate({
   notice,
+  diagnosticReasons,
   onAuthenticated,
 }: {
   notice: string | null
+  /** En modo diagnóstico: qué falta (el admin-token da paso a la pantalla de configuración). */
+  diagnosticReasons?: readonly string[]
   onAuthenticated: (token: string, initialRuns: RunSummary[]) => void
 }) {
   const [input, setInput] = useState('')
@@ -193,11 +197,29 @@ function TokenGate({
   return (
     <main className="status-screen">
       <section className="status-card">
-        <h1>Acceso al Panel de CodeNetix</h1>
-        <p>
-          Introduce el <code>admin-token</code> de esta instancia (guardado en <code>/data/admin.token</code> o en{' '}
-          <code>CODENETIX__Host__AccessToken</code>). Se guardará localmente en tu navegador.
-        </p>
+        {diagnosticReasons ? (
+          <>
+            <h1>CodeNetix necesita configuración</h1>
+            <p>La instancia está en marcha, pero no procesará trabajo hasta que completes la configuración:</p>
+            <ul>
+              {diagnosticReasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+            <p>
+              Para pegar tus claves desde aquí, entra con el <code>admin-token</code> de esta instancia (está en{' '}
+              <code>/data/admin.token</code>: <code>docker exec codenetix cat /data/admin.token</code>).
+            </p>
+          </>
+        ) : (
+          <>
+            <h1>Acceso al Panel de CodeNetix</h1>
+            <p>
+              Introduce el <code>admin-token</code> de esta instancia (guardado en <code>/data/admin.token</code> o en{' '}
+              <code>CODENETIX__Host__AccessToken</code>). Se guardará localmente en tu navegador.
+            </p>
+          </>
+        )}
         <form className="token-form" onSubmit={handleSubmit}>
           <label htmlFor="admin-token-input">admin-token</label>
           <input
@@ -227,10 +249,13 @@ function LivePanel({
   token,
   initialRuns,
   onLogout,
+  onHealthChange,
 }: {
   token: string
   initialRuns: RunSummary[] | null
   onLogout: (reason?: string) => void
+  /** Tras guardar claves desde «Configuración»: el estado de salud que devuelve el servidor. */
+  onHealthChange: (health: HealthInfo) => void
 }) {
   const [activeTab, setActiveTab] = useState<PanelTab>('live')
   const [runs, setRuns] = useState<RunSummary[]>(initialRuns ?? [])
@@ -248,6 +273,8 @@ function LivePanel({
   const [loadingRuns, setLoadingRuns] = useState(initialRuns === null)
   const [cancellingRunIds, setCancellingRunIds] = useState<ReadonlySet<string>>(() => new Set())
   const [launchModalOpen, setLaunchModalOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const handleCloseSettings = useCallback(() => setSettingsOpen(false), [])
 
   const lastContiguousSeqRef = useRef<number>(0)
   const selectedRunIdRef = useRef<string | null>(selectedRunId)
@@ -843,6 +870,9 @@ function LivePanel({
               {loadingRuns ? 'Actualizando…' : 'Actualizar'}
             </button>
           ) : null}
+          <button type="button" className="btn" onClick={() => setSettingsOpen(true)}>
+            Configuración
+          </button>
           <button type="button" className="btn" onClick={() => onLogout()}>
             Cambiar token
           </button>
@@ -1026,6 +1056,15 @@ function LivePanel({
         onRefreshRuns={handleRefreshRunsFromModal}
         onLogout={onLogout}
       />
+
+      <SecretsSettings
+        mode="modal"
+        open={settingsOpen}
+        token={token}
+        onClose={handleCloseSettings}
+        onSaved={(settings) => onHealthChange(healthFromSettings(settings))}
+        onLogout={onLogout}
+      />
     </div>
   )
 }
@@ -1074,6 +1113,11 @@ export default function App() {
     setToken(null)
   }, [])
 
+  // Guardar claves desde el Panel (historia 8.1) cambia la salud sin reiniciar: Diagnostic → Ready abre el Panel en vivo.
+  const handleHealthChange = useCallback((health: HealthInfo) => {
+    setHealthState({ kind: 'health', health })
+  }, [])
+
   if (healthState.kind === 'loading') {
     return (
       <main className="status-screen">
@@ -1108,19 +1152,21 @@ export default function App() {
   }
 
   if (health.status === 'Diagnostic') {
+    // Primero el admin-token. Después, si falta una clave que se puede pegar aquí (keysMissing y algún campo editable),
+    // la pantalla de configuración; si no, SecretsSettings muestra la guía de siempre ("define las variables y reinicia").
+    if (!token) {
+      return (
+        <TokenGate notice={logoutReason} diagnosticReasons={health.reasons} onAuthenticated={handleAuthenticated} />
+      )
+    }
+
     return (
-      <main className="status-screen">
-        <section className="status-card">
-          <h1>CodeNetix está en modo diagnóstico</h1>
-          <p>La instancia está en marcha, pero no procesará trabajo hasta que completes la configuración:</p>
-          <ul>
-            {health.reasons.map((reason) => (
-              <li key={reason}>{reason}</li>
-            ))}
-          </ul>
-          <p>Define las variables que faltan y reinicia el contenedor.</p>
-        </section>
-      </main>
+      <SecretsSettings
+        mode="setup"
+        token={token}
+        onSaved={(settings) => handleHealthChange(healthFromSettings(settings))}
+        onLogout={handleLogout}
+      />
     )
   }
 
@@ -1128,5 +1174,7 @@ export default function App() {
     return <TokenGate notice={logoutReason} onAuthenticated={handleAuthenticated} />
   }
 
-  return <LivePanel token={token} initialRuns={initialRuns} onLogout={handleLogout} />
+  return (
+    <LivePanel token={token} initialRuns={initialRuns} onLogout={handleLogout} onHealthChange={handleHealthChange} />
+  )
 }

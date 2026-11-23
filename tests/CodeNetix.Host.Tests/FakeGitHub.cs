@@ -34,6 +34,11 @@ internal sealed class FakeGitHub : IAsyncDisposable
                 await DelayAsync(context);
                 if (UserStatus == StatusCodes.Status200OK)
                 {
+                    if (OAuthScopes is { } scopes)
+                    {
+                        context.Response.Headers["X-OAuth-Scopes"] = scopes;
+                    }
+
                     return Results.Json(new { login = Login, id = 1 });
                 }
 
@@ -551,6 +556,9 @@ internal sealed class FakeGitHub : IAsyncDisposable
     public string Login { get; set; } = DefaultLogin;
 
     public int UserStatus { get; set; } = StatusCodes.Status200OK;
+
+    /// <summary>Cabecera <c>X-OAuth-Scopes</c> de <c>GET /user</c> (token clásico); <c>null</c> = no se envía (fine-grained).</summary>
+    public string? OAuthScopes { get; set; }
 
     public string Permission { get; set; } = "write";
 

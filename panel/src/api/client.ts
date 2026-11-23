@@ -7,8 +7,11 @@ import type {
   RunResponse,
   RunState,
   RunSummary,
+  PanelSecretId,
+  SecretsSettingsResponse,
   SubmitManualEventRequest,
   SubmitManualEventResponse,
+  UpdateSecretsRequest,
 } from './generated'
 
 export const ADMIN_TOKEN_STORAGE_KEY = 'codenetix.adminToken'
@@ -315,6 +318,103 @@ export async function fetchIgnoredEvents(
   }
 
   return (await response.json()) as IgnoredEventSummary[]
+}
+
+export const SECRETS_SETTINGS_URL = '/api/settings/secrets'
+
+/** Campo del cuerpo de `PUT /api/settings/secrets` de cada clave (camelCase, como `UpdateSecretsRequest`). */
+export const SECRET_FIELDS: Record<PanelSecretId, keyof UpdateSecretsRequest> = {
+  GitHubToken: 'gitHubToken',
+  AnthropicApiKey: 'anthropicApiKey',
+  OpenAIApiKey: 'openAIApiKey',
+}
+
+/**
+ * Error de `PUT /api/settings/secrets` (400, 409, 422, 503): además del mensaje general trae, si el servidor los da,
+ * los motivos por clave para mostrarlos junto a cada campo. Nunca contiene el valor de la clave.
+ */
+export class SecretsUpdateError extends ApiHttpError {
+  readonly fieldErrors: Partial<Record<PanelSecretId, string>>
+
+  constructor(status: number, message: string, fieldErrors: Partial<Record<PanelSecretId, string>>) {
+    super(status, message)
+    this.name = 'SecretsUpdateError'
+    this.fieldErrors = fieldErrors
+  }
+}
+
+/** Estado de las claves (configurada, origen y pista enmascarada; nunca el valor) y salud de la instancia (historia 8.1). */
+export async function fetchSecretsSettings(token: string, signal?: AbortSignal): Promise<SecretsSettingsResponse> {
+  const response = await fetch(SECRETS_SETTINGS_URL, {
+    signal,
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  })
+
+  if (response.status === 401) {
+    throw new UnauthorizedError()
+  }
+
+  if (!response.ok) {
+    throw new ApiHttpError(response.status, await readProblemDetail(response))
+  }
+
+  return (await response.json()) as SecretsSettingsResponse
+}
+
+/**
+ * Comprueba y guarda las claves indicadas (todo o nada). Solo se envían las que llevan valor: el resto no cambia.
+ * Devuelve el estado nuevo (con `checks`); un rechazo lanza `SecretsUpdateError` con los motivos por clave.
+ */
+export async function updateSecrets(
+  token: string,
+  request: Partial<UpdateSecretsRequest>,
+  signal?: AbortSignal,
+): Promise<SecretsSettingsResponse> {
+  const body: Partial<UpdateSecretsRequest> = {}
+  for (const field of Object.values(SECRET_FIELDS)) {
+    const value = request[field]?.trim()
+    if (value) {
+      body[field] = value
+    }
+  }
+
+  const response = await fetch(SECRETS_SETTINGS_URL, {
+    method: 'PUT',
+    signal,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  })
+
+  if (response.status === 401) {
+    throw new UnauthorizedError()
+  }
+
+  if (!response.ok) {
+    let message = `Error HTTP ${response.status}`
+    const fieldErrors: Partial<Record<PanelSecretId, string>> = {}
+    try {
+      const problem = (await response.json()) as ProblemDetails & { errors?: Record<string, unknown> }
+      message = problem.detail?.trim() || problem.title?.trim() || message
+      for (const [id, field] of Object.entries(SECRET_FIELDS) as [PanelSecretId, string][]) {
+        const fieldMessage = problem.errors?.[field]
+        if (typeof fieldMessage === 'string' && fieldMessage.trim()) {
+          fieldErrors[id] = fieldMessage.trim()
+        }
+      }
+    } catch {
+      // Cuerpo no JSON.
+    }
+    throw new SecretsUpdateError(response.status, message, fieldErrors)
+  }
+
+  return (await response.json()) as SecretsSettingsResponse
 }
 
 export type WaitForEventRunResult =

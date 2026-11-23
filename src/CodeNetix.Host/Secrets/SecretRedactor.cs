@@ -21,8 +21,10 @@ internal sealed partial class SecretRedactor : ISecretRedactor
         "ApiKey", "Token", "AuthToken", "AccessToken", "Secret", "WebhookSecret", "Password", "GITHUB_TOKEN",
     };
 
-    /// <summary>Pares (texto a buscar, máscara), del más largo al más corto.</summary>
-    private readonly (string Value, string Mask)[] _knownSecrets;
+    private readonly Lock _lock = new();
+
+    /// <summary>Pares (texto a buscar, máscara), del más largo al más corto. Se sustituye entero al añadir secretos.</summary>
+    private volatile (string Value, string Mask)[] _knownSecrets;
 
     public SecretRedactor(IConfiguration configuration)
         : this(CollectSecrets(configuration))
@@ -32,8 +34,30 @@ internal sealed partial class SecretRedactor : ISecretRedactor
     public SecretRedactor(IEnumerable<string> secrets)
     {
         ArgumentNullException.ThrowIfNull(secrets);
+        _knownSecrets = Build([], secrets);
+    }
 
+    /// <summary>
+    /// Añade secretos conocidos en caliente (claves guardadas desde el Panel, historia 8.1). Los anteriores se conservan:
+    /// una key rotada sigue siendo un secreto.
+    /// </summary>
+    public void AddSecrets(IEnumerable<string> secrets)
+    {
+        ArgumentNullException.ThrowIfNull(secrets);
+        lock (_lock)
+        {
+            _knownSecrets = Build(_knownSecrets, secrets);
+        }
+    }
+
+    private static (string Value, string Mask)[] Build((string Value, string Mask)[] existing, IEnumerable<string> secrets)
+    {
         var pairs = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (value, mask) in existing)
+        {
+            pairs.TryAdd(value, mask);
+        }
+
         foreach (var raw in secrets)
         {
             var secret = raw?.Trim();
@@ -54,7 +78,7 @@ internal sealed partial class SecretRedactor : ISecretRedactor
             pairs.TryAdd(urlEscaped, mask);
         }
 
-        _knownSecrets = [.. pairs.Select(p => (p.Key, p.Value)).OrderByDescending(p => p.Key.Length)];
+        return [.. pairs.Select(p => (p.Key, p.Value)).OrderByDescending(p => p.Key.Length)];
     }
 
     public string Redact(string value)

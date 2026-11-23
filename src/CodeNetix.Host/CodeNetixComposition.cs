@@ -153,14 +153,16 @@ internal static class CodeNetixComposition
         builder.Services.AddOptions<SandboxOptions>()
             .PostConfigure<IOptions<InstanceOptions>>((sandbox, instance) =>
             {
-                if (AgentEndpointResolver.ResolveCoder(instance.Value).Endpoint is { } coder)
+                if (ResolveSandboxCoder(instance.Value) is { } coder)
                 {
-                    sandbox.Coder = new SandboxCoderEndpoint(coder.Provider, coder.BaseUrl, coder.ApiKey, coder.Model);
+                    sandbox.Coder = coder;
                 }
             });
 
-        // Redacción (AD-13): un único ISecretRedactor, aplicado en el sumidero de logs y en /api.
-        builder.Services.AddSingleton<ISecretRedactor>(sp => new SecretRedactor(sp.GetRequiredService<IConfiguration>()));
+        // Redacción (AD-13): un único ISecretRedactor, aplicado en el sumidero de logs y en /api. En serve, las claves del
+        // Panel se le añaden al arrancar y al guardarlas (historia 8.1).
+        builder.Services.AddSingleton(sp => new SecretRedactor(sp.GetRequiredService<IConfiguration>()));
+        builder.Services.AddSingleton<ISecretRedactor>(sp => sp.GetRequiredService<SecretRedactor>());
         builder.Logging.ClearProviders();
         builder.Logging
             .AddConsole(options => options.FormatterName = RedactingConsoleFormatter.FormatterName)
@@ -276,6 +278,12 @@ internal static class CodeNetixComposition
                 api.BaseUrl = sentry.EffectiveBaseUrl;
             });
     }
+
+    /// <summary>Proveedor del Programador para el Egress Gateway (AD-7), o <c>null</c> si la configuración no lo resuelve.</summary>
+    public static SandboxCoderEndpoint? ResolveSandboxCoder(InstanceOptions instance) =>
+        AgentEndpointResolver.ResolveCoder(instance).Endpoint is { } coder
+            ? new SandboxCoderEndpoint(coder.Provider, coder.BaseUrl, coder.ApiKey, coder.Model)
+            : null;
 
     private static List<string> ReadConfiguredHosts(IConfigurationSection section)
     {
