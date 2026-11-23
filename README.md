@@ -396,6 +396,14 @@ por separado con:
 dotnet test --project tests/CodeNetix.Host.Tests -- --filter-trait Category=SecurityFire
 ```
 
+## Documentación de diseño
+
+Antes de programar se escribieron los requisitos y la arquitectura, y cada historia tiene su propia
+especificación con el registro de su revisión. Todo está en [`_bmad-output/`](_bmad-output/):
+
+- [`planning-artifacts/`](_bmad-output/planning-artifacts/): producto (PRD), arquitectura y las 7 épicas.
+- [`implementation-artifacts/`](_bmad-output/implementation-artifacts/): la especificación de cada una de las 36 historias.
+
 ## Créditos, contribución y licencia
 
 - **Créditos:** CodeNetix está inspirado en el trabajo y las ideas de **Eric Risco**.
