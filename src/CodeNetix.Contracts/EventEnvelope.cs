@@ -47,11 +47,18 @@ public enum ManualEventOutcome
     /// <summary>La URL no es una issue de GitHub admitida. No se persiste nada.</summary>
     Rejected,
 
-    /// <summary>La URL es de Sentry, todavía sin soporte (Épica 7). No se persiste nada.</summary>
-    SentryNotSupported,
+    /// <summary>
+    /// La petición es válida pero la Configuración de instancia no permite crear el Evento (Sentry sin configurar, otra
+    /// organización, incidencia inexistente o token de Sentry rechazado, proyecto sin Repositorio objetivo, GitHub rechaza
+    /// la issue de seguimiento). No se persiste nada.
+    /// </summary>
+    Unprocessable,
 
     /// <summary>No se ha podido autorizar el disparador (GitHub no responde o token inválido). No se persiste nada.</summary>
     Unavailable,
+
+    /// <summary>Sentry no responde (red, 5xx, timeout, rate limit). No se persiste nada; se puede reintentar.</summary>
+    SentryUnavailable,
 }
 
 /// <summary>Evento persistido tal como lo ve quien lo envió.</summary>
@@ -61,7 +68,7 @@ public sealed record ManualEventInfo(Guid Id, EventStatus Status, string? Actor,
 
 /// <summary>
 /// Resultado de enviar un Evento manual: <see cref="Event"/> tiene valor en <c>Created</c> y
-/// <c>Existing</c>; <see cref="Reason"/>, en <c>Rejected</c>, <c>SentryNotSupported</c> y <c>Unavailable</c>.
+/// <c>Existing</c>; <see cref="Reason"/>, en <c>Rejected</c>, <c>Unprocessable</c>, <c>Unavailable</c> y <c>SentryUnavailable</c>.
 /// </summary>
 public sealed record ManualEventResult(ManualEventOutcome Outcome, ManualEventInfo? Event, string? Reason)
 {
@@ -73,9 +80,11 @@ public sealed record ManualEventResult(ManualEventOutcome Outcome, ManualEventIn
 
     public static ManualEventResult Rejected(string reason) => new(ManualEventOutcome.Rejected, null, reason);
 
-    public static ManualEventResult SentryNotSupported(string reason) => new(ManualEventOutcome.SentryNotSupported, null, reason);
+    public static ManualEventResult Unprocessable(string reason) => new(ManualEventOutcome.Unprocessable, null, reason);
 
     public static ManualEventResult Unavailable(string reason) => new(ManualEventOutcome.Unavailable, null, reason);
+
+    public static ManualEventResult SentryUnavailable(string reason) => new(ManualEventOutcome.SentryUnavailable, null, reason);
 }
 
 /// <summary>Entrada de trabajo manual (<c>codenetix fix</c>, <c>POST /api/events/manual</c>).</summary>

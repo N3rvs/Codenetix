@@ -260,8 +260,50 @@ Cómo se comporta:
   dato para los agentes, nunca instrucciones, y el resultado siempre es un PR que revisa una persona.
 - Las entregas pendientes se guardan en memoria (como en GitHub): si CodeNetix se reinicia antes de procesarlas o GitHub
   no responde tras unos 40 s de reintentos, se descartan con un aviso en el log.
-- `codenetix fix <url-de-sentry>` todavía responde «próximamente»; la traza completa para el Analista llega en una
-  versión posterior.
+- Con `CODENETIX__Sentry__AuthToken` el Analista recibe además la traza del error y `codenetix fix <url-de-sentry>`
+  funciona (ver la sección siguiente).
+
+## Contexto de Sentry para el Analista
+
+Con un token de la API de Sentry, el Analista recibe la traza, el contexto y la frecuencia del error de cada Ejecución que
+nace de Sentry (webhook o `codenetix fix <url-de-sentry>`), así la Spec apunta a la causa real y no solo al título.
+
+| Variable | Valor por defecto |
+|---|---|
+| `CODENETIX__Sentry__AuthToken` | Vacío (contexto y `fix <url-de-sentry>` desactivados). Token de la integración interna (o *Auth Token*) con los permisos `event:read` y `project:read` |
+| `CODENETIX__Sentry__Organization` | Ninguno; obligatorio con el token. Slug de la organización (`acme` en `https://acme.sentry.io`) |
+| `CODENETIX__Sentry__BaseUrl` | `https://sentry.io`. Para Sentry autoalojado, su URL (`https://sentry.example.com`); usa `https` salvo en una red de confianza: el token viaja en `Authorization` |
+
+Valores inválidos (token de menos de 8 caracteres, organización que no es un slug, URL no `http(s)` o con credenciales,
+token sin organización) dejan la instancia en modo diagnóstico con el motivo, sin citar el valor.
+
+Qué hace en cada Ejecución que viene de Sentry, justo antes de llamar al Analista:
+
+- Lee la incidencia (`GET /api/0/organizations/<org>/issues/<id>/`: frecuencia, usuarios afectados, primera y última
+  vez) y su último evento (`…/events/latest/`), con 10 s por petición y 20 s en total, sin reintentos. El token solo se
+  envía a `BaseUrl` y nunca se registra.
+- Pasa al Analista, en un bloque de datos (nunca en sus instrucciones), solo esto: incidencia, título, culprit y nivel;
+  frecuencia; release y entorno; las etiquetas `environment`, `release`, `dist`, `level`, `handled`, `mechanism`,
+  `logger`, `transaction`, `runtime`, `os`, `browser` y `device.family`; hasta 3 excepciones encadenadas con 30 marcos
+  en total (primero los de tu código, con la línea de código de cada uno) y las 20 últimas migas. Todo acotado a 16 000
+  caracteres.
+- **Nunca** envía al LLM la petición HTTP (URL, cabeceras, cookies, query string, cuerpo, variables de entorno), el
+  usuario (email, IP, id, nombre), `contexts`, `extra`, las variables locales de los marcos, las rutas absolutas ni el
+  `data` de las migas. En el texto que sí pasa, las URLs pierden la query string, los emails se cambian por `[email]`,
+  las IP por `[ip]` y los secretos conocidos (tokens y keys de la instancia, patrones `sk-…`, `ghp_…`) se enmascaran.
+  Aun así, revisa tu `beforeSend`/*data scrubbing* de Sentry: los mensajes de excepción los escribe tu aplicación.
+- Si Sentry no está configurado, no responde, rechaza el token o limita las peticiones, el análisis **sigue sin
+  contexto** y la Ejecución muestra el evento `SentryContextUnavailable` con el motivo. Con contexto, `SentryContextAttached`
+  (cuántos marcos y migas). Nada de Sentry se guarda en la base de datos.
+
+`codenetix fix <url-de-sentry>` (o el formulario del Panel) acepta `https://sentry.io/organizations/<org>/issues/<id>/`,
+`https://<org>.sentry.io/issues/<id>/` y `<tu-sentry>/organizations/<org>/issues/<id>/`. CodeNetix nunca llama al host
+de la URL: lee la incidencia en `BaseUrl`, busca su proyecto en `CODENETIX__Sentry__Projects__<slug>`, comprueba que el
+token de GitHub de la instancia puede escribir en ese repositorio, reutiliza o crea la issue de seguimiento y crea el
+Evento (clave `manual:<url>:<requestId>`, sobre la misma issue que los webhooks: como mucho una Ejecución en curso).
+Respuestas: `400` si la URL no lleva un id numérico; `422` si Sentry no está configurado, la URL es de otra organización,
+la incidencia no existe o el token no puede verla, o el proyecto no tiene repositorio; `502` si Sentry o GitHub no
+responden (el CLI reintenta). Sin permiso de escritura, el Evento queda ignorado («no autorizado») y no se crea la issue.
 
 ## Modo GitHub Action (`codenetix action`)
 

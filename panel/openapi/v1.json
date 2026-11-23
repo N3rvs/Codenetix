@@ -81,8 +81,8 @@
               }
             }
           },
-          "501": {
-            "description": "Not Implemented",
+          "422": {
+            "description": "Unprocessable Entity",
             "content": {
               "application/problem+json": {
                 "schema": {
@@ -766,6 +766,12 @@
           },
           {
             "$ref": "#/components/schemas/RunEventPullRequestOpened"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventSentryContextAttached"
+          },
+          {
+            "$ref": "#/components/schemas/RunEventSentryContextUnavailable"
           }
         ],
         "discriminator": {
@@ -790,7 +796,9 @@
             "ReviewerOutputRejected": "#/components/schemas/RunEventReviewerOutputRejected",
             "VerdictRecorded": "#/components/schemas/RunEventVerdictRecorded",
             "RiskClassified": "#/components/schemas/RunEventRiskClassified",
-            "PullRequestOpened": "#/components/schemas/RunEventPullRequestOpened"
+            "PullRequestOpened": "#/components/schemas/RunEventPullRequestOpened",
+            "SentryContextAttached": "#/components/schemas/RunEventSentryContextAttached",
+            "SentryContextUnavailable": "#/components/schemas/RunEventSentryContextUnavailable"
           }
         }
       },
@@ -1495,6 +1503,122 @@
             "enum": [
               "SandboxReleased"
             ],
+            "type": "string"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventSentryContextAttached": {
+        "required": [
+          "sentryIssueId",
+          "frames",
+          "breadcrumbs",
+          "characters",
+          "truncated"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "SentryContextAttached"
+            ],
+            "type": "string"
+          },
+          "sentryIssueId": {
+            "type": "string"
+          },
+          "frames": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "breadcrumbs": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "characters": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int32"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "seq": {
+            "pattern": "^-?(?:0|[1-9]\\d*)$",
+            "type": [
+              "integer",
+              "string"
+            ],
+            "format": "int64"
+          },
+          "runId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stageId": {
+            "type": [
+              "null",
+              "string"
+            ],
+            "format": "uuid"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RunEventSentryContextUnavailable": {
+        "required": [
+          "sentryIssueId",
+          "reason"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "SentryContextUnavailable"
+            ],
+            "type": "string"
+          },
+          "sentryIssueId": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "reason": {
             "type": "string"
           },
           "seq": {

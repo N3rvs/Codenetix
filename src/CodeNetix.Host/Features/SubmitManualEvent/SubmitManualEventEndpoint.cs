@@ -7,8 +7,9 @@ namespace CodeNetix.Host.Features.SubmitManualEvent;
 /// <summary>
 /// <c>POST /api/events/manual</c> (FR-5, AD-4): cuerpo <c>{ "url": "...", "requestId": "&lt;guid&gt;" }</c>.
 /// 201 si el Evento es nuevo, 200 si ya existía (mismo <c>requestId</c>), ambos con <c>status</c>
-/// (<c>Accepted</c> o <c>Ignored</c>) y <c>reason</c>; 400 si el cuerpo o la URL no son válidos, 501 para
-/// Sentry, 502 si no se puede autorizar en GitHub y 503 si la instancia no está <c>Ready</c>. En ningún
+/// (<c>Accepted</c> o <c>Ignored</c>) y <c>reason</c>; 400 si el cuerpo o la URL no son válidos, 422 si la configuración
+/// no permite crear el Evento (URL de Sentry sin Sentry configurado, otra organización, incidencia inexistente, proyecto
+/// sin Repositorio objetivo…), 502 si GitHub o Sentry no responden y 503 si la instancia no está <c>Ready</c>. En ningún
 /// error se persiste nada. Protegido por el <c>admin-token</c> como todo <c>/api</c>. No crea Ejecuciones.
 /// </summary>
 internal static class SubmitManualEventEndpoint
@@ -32,7 +33,7 @@ internal static class SubmitManualEventEndpoint
             .Produces<SubmitManualEventResponse>(StatusCodes.Status201Created)
             .Produces<SubmitManualEventResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status400BadRequest)
-            .ProducesProblem(StatusCodes.Status501NotImplemented)
+            .ProducesProblem(StatusCodes.Status422UnprocessableEntity)
             .ProducesProblem(StatusCodes.Status502BadGateway)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
@@ -73,15 +74,20 @@ internal static class SubmitManualEventEndpoint
         {
             ManualEventOutcome.Created => Results.Json(SubmitManualEventResponse.From(result.Event!, created: true), statusCode: StatusCodes.Status201Created),
             ManualEventOutcome.Existing => Results.Ok(SubmitManualEventResponse.From(result.Event!, created: false)),
-            ManualEventOutcome.SentryNotSupported => Results.Problem(
-                statusCode: StatusCodes.Status501NotImplemented,
-                title: "Fuente no disponible",
+            ManualEventOutcome.Unprocessable => Results.Problem(
+                statusCode: StatusCodes.Status422UnprocessableEntity,
+                title: "No se puede crear el Evento",
                 detail: result.Reason,
                 instance: context.Request.Path),
             ManualEventOutcome.Unavailable => Results.Problem(
                 statusCode: StatusCodes.Status502BadGateway,
                 title: "No se puede autorizar el Evento",
                 detail: $"No se puede comprobar el permiso en GitHub: {result.Reason}.",
+                instance: context.Request.Path),
+            ManualEventOutcome.SentryUnavailable => Results.Problem(
+                statusCode: StatusCodes.Status502BadGateway,
+                title: "Sentry no responde",
+                detail: $"No se puede leer la incidencia en Sentry: {result.Reason}.",
                 instance: context.Request.Path),
             _ => BadRequest(context, result.Reason ?? "URL no admitida."),
         };

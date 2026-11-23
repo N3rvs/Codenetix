@@ -85,9 +85,9 @@ development_status:
   6-5-documentación-de-lanzamiento: done
   epic-6-retrospective: optional
 
-  epic-7: in-progress
+  epic-7: done
   7-1-sondeo-de-issues-etiquetadas: done
   7-2-webhooks-de-github: done
   7-3-sentry-webhooks-y-correspondencia-con-el-repositorio: done
-  7-4-contexto-de-sentry-para-el-analista: backlog
+  7-4-contexto-de-sentry-para-el-analista: done
   epic-7-retrospective: optional

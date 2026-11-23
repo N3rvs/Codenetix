@@ -379,7 +379,7 @@ public sealed class FixModeTests : IDisposable
     }
 
     [Fact]
-    public async Task End_to_end_sentry_prints_coming_soon_and_exits_1()
+    public async Task End_to_end_sentry_without_Sentry_configured_prints_the_reason_and_exits_1()
     {
         var dataDirectory = Path.Combine(_root, "host-data");
         var webRoot = Path.Combine(_root, "wwwroot");
@@ -394,7 +394,7 @@ public sealed class FixModeTests : IDisposable
         }), handler);
 
         Assert.Equal(CodeNetixCommandLine.ExitFailure, exitCode);
-        Assert.Equal("Soporte de Sentry disponible próximamente.", _stderr.ToString().Trim());
+        Assert.Equal(CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.NotConfiguredReason, _stderr.ToString().Trim());
     }
 
     // --- Utilidades --------------------------------------------------------------------

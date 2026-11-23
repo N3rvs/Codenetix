@@ -380,6 +380,12 @@ internal static class FixMode
             case "SpecGenerated":
                 return $"[{seq}] SpecGenerated {GetString(item, "model")} ({GetNumber(item, "attempts")} intento(s))";
 
+            case "SentryContextAttached":
+                return $"[{seq}] SentryContextAttached incidencia {GetString(item, "sentryIssueId")}: {GetNumber(item, "frames")} marco(s), {GetNumber(item, "breadcrumbs")} miga(s)";
+
+            case "SentryContextUnavailable":
+                return $"[{seq}] SentryContextUnavailable {GetString(item, "reason")}";
+
             case "VerdictRecorded":
                 return $"[{seq}] VerdictRecorded ronda {GetNumber(item, "round")} {GetString(item, "reviewer")} → {GetString(item, "decision")} ({GetNumber(item, "findingCount")} hallazgo(s))";
 

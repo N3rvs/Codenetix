@@ -193,16 +193,16 @@ public sealed class SubmitManualEventTests : IDisposable
     }
 
     [Fact]
-    public async Task Sentry_url_is_501_and_persists_nothing()
+    public async Task Sentry_url_without_Sentry_configured_is_422_and_persists_nothing()
     {
         await using var factory = CreateReadyFactory();
         using var client = factory.CreateAuthorizedClient();
 
         using var response = await PostAsync(client, "https://acme.sentry.io/issues/123/", Guid.NewGuid().ToString());
 
-        Assert.Equal(HttpStatusCode.NotImplemented, response.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
         var problem = await ReadProblemAsync(response);
-        Assert.Equal("Soporte de Sentry disponible próximamente.", problem.Detail);
+        Assert.Equal(CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.NotConfiguredReason, problem.Detail);
         Assert.Empty(await ReadEventsAsync());
     }
 

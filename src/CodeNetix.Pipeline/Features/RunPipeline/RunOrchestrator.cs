@@ -29,8 +29,9 @@ internal interface IRunOrchestrator
 /// <see cref="SandboxCreated"/>; si falla, <c>Failed(StageError, "no se pudo crear el Sandbox: …")</c>. La sesión se
 /// libera en el <c>finally</c> (antes de borrar el árbol de trabajo) y se registra <see cref="SandboxReleased"/>.</item>
 /// <item>Paso 3 (<c>Analyzing</c>): GitHub lee la issue (si falla, <c>Failed(StageError, "no se pudo leer la issue: …")</c>),
-/// se listan los archivos del árbol (<c>git ls-files</c>, como mucho <see cref="AnalysisInput.MaxRepositoryFiles"/>) y se
-/// llama al Analista. <c>Ok</c> → la fila de <c>run_specs</c> y <see cref="SpecGenerated"/> en el mismo <c>SaveChanges</c>;
+/// se listan los archivos del árbol (<c>git ls-files</c>, como mucho <see cref="AnalysisInput.MaxRepositoryFiles"/>), se pide
+/// una vez el contexto de Sentry del Evento (<see cref="ISentryContextProvider"/>: <see cref="SentryContextAttached"/> o
+/// <see cref="SentryContextUnavailable"/>, sin fallar nunca por él) y se llama al Analista. <c>Ok</c> → la fila de <c>run_specs</c> y <see cref="SpecGenerated"/> en el mismo <c>SaveChanges</c>;
 /// <c>NotAutomatable</c> → <see cref="AnalysisRejected"/> y <c>Failed(NotAutomatable, "&lt;categoría&gt;: &lt;explicación&gt;")</c>
 /// en el mismo <c>SaveChanges</c> y, tras el commit, el comentario en la issue (<see cref="IIssueNotifier"/>) con
 /// <see cref="IssueCommented"/> o <see cref="NotificationFailed"/>;
@@ -70,7 +71,8 @@ internal sealed partial class RunOrchestrator(
     ISandboxManager sandboxes,
     RunCancellationRegistry cancellationRegistry,
     IOptions<InstanceLimits> limits,
-    ILogger<RunOrchestrator> logger) : IRunOrchestrator
+    ILogger<RunOrchestrator> logger,
+    ISentryContextProvider? sentryContexts = null) : IRunOrchestrator
 {
     public const string IssueUnreadablePrefix = "no se pudo leer la issue: ";
 
@@ -422,7 +424,8 @@ internal sealed partial class RunOrchestrator(
         }
 
         var (limited, truncated) = AnalysisInput.LimitFiles(files);
-        var input = new AnalysisInput(run.Id, issue.Title, issue.Body, limited, truncated, config);
+        var sentryContext = await GetSentryContextAsync(context, run, cancellationToken).ConfigureAwait(false);
+        var input = new AnalysisInput(run.Id, issue.Title, issue.Body, limited, truncated, config, sentryContext);
         var result = await analyst.AnalyzeAsync(input, cancellationToken).ConfigureAwait(false);
         if (result is AnalysisResult.BudgetExhausted exhausted)
         {
@@ -469,6 +472,59 @@ internal sealed partial class RunOrchestrator(
                 throw new InvalidOperationException($"Resultado del Analista desconocido: {result.GetType().Name}.");
         }
     }
+
+    /// <summary>
+    /// Historia 7.4 (FR-5): contexto de Sentry del Evento de la Ejecución, pedido una sola vez. Evento que no es de Sentry →
+    /// <c>null</c> sin <c>RunEvent</c>; contexto → <see cref="SentryContextAttached"/>; sin contexto (sin configurar, Sentry no
+    /// responde, token rechazado, rate limit o fallo inesperado) → <see cref="SentryContextUnavailable"/> y <c>null</c>: el
+    /// análisis sigue sin él. Nunca falla la Ejecución por falta de contexto.
+    /// </summary>
+    private async Task<UntrustedText?> GetSentryContextAsync(PipelineDbContext context, PipelineRun run, CancellationToken cancellationToken)
+    {
+        if (sentryContexts is null)
+        {
+            return null;
+        }
+
+        SentryContextResult result;
+        try
+        {
+            result = await sentryContexts.GetForEventAsync(run.EventId, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            LogSentryContextFailed(ex, RunShortId.Of(run.Id));
+            result = SentryContextResult.Unavailable(null, "fallo inesperado al obtener el contexto de Sentry");
+        }
+
+        switch (result.Status)
+        {
+            case SentryContextStatus.Attached when result.Context is not null:
+                await log.AddAsync(
+                    context,
+                    run.Id,
+                    new SentryContextAttached(result.SentryIssueId ?? "?", result.Frames, result.Breadcrumbs, result.Characters, result.Truncated),
+                    cancellationToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
+                return result.Context;
+
+            case SentryContextStatus.Attached:
+            case SentryContextStatus.Unavailable:
+                await log.AddAsync(
+                    context,
+                    run.Id,
+                    new SentryContextUnavailable(result.SentryIssueId, Truncate(result.Reason ?? "sin contexto")),
+                    cancellationToken).ConfigureAwait(false);
+                await log.SaveAndPublishAsync(context, cancellationToken).ConfigureAwait(false);
+                return null;
+
+            default:
+                return null;
+        }
+    }
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "Ejecución {ShortId}: fallo inesperado al obtener el contexto de Sentry; el análisis sigue sin él.")]
+    private partial void LogSentryContextFailed(Exception exception, string shortId);
 
     /// <summary>
     /// Publica el comentario de rechazo (idempotente por (<c>runId</c>, <c>NotAutomatable</c>)) y registra

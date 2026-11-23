@@ -12,7 +12,7 @@ namespace CodeNetix.Host.Tests;
 /// <summary>
 /// Pruebas de integración para la Historia 4.5 (Lanzar trabajo desde el Panel):
 /// flujo completo <c>POST /api/events/manual</c> → <c>GET /api/events/{eventId}</c> → <c>GET /api/runs/{runId}</c>,
-/// paridad exacta de errores con el CLI (<see cref="FixMode"/>), Sentry 501 y autenticación 401.
+/// paridad exacta de errores con el CLI (<see cref="FixMode"/>), Sentry sin configurar (422) y autenticación 401.
 /// </summary>
 public sealed class LaunchFromPanelTests : IDisposable
 {
@@ -89,7 +89,7 @@ public sealed class LaunchFromPanelTests : IDisposable
     [Theory]
     [InlineData("no-es-una-url", HttpStatusCode.BadRequest)]
     [InlineData("https://github.com/acme/web/pull/10", HttpStatusCode.BadRequest)]
-    [InlineData("https://acme.sentry.io/issues/123/", HttpStatusCode.NotImplemented)]
+    [InlineData("https://acme.sentry.io/issues/123/", HttpStatusCode.UnprocessableEntity)]
     public async Task Invalid_or_unsupported_url_returns_exact_same_error_detail_as_cli_fix(
         string candidateUrl,
         HttpStatusCode expectedStatus)
@@ -170,7 +170,7 @@ public sealed class LaunchFromPanelTests : IDisposable
     }
 
     [Fact]
-    public async Task Sentry_url_returns_501_and_unauthenticated_request_returns_401()
+    public async Task Sentry_url_without_Sentry_configured_returns_422_and_unauthenticated_request_returns_401()
     {
         await using var factory = new CodeNetixFactory(
             _dataDirectory,
@@ -184,10 +184,10 @@ public sealed class LaunchFromPanelTests : IDisposable
             new SubmitManualEventRequest("https://acme.sentry.io/issues/123/", Guid.NewGuid().ToString("D")),
             Ct);
 
-        Assert.Equal(HttpStatusCode.NotImplemented, sentryResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, sentryResponse.StatusCode);
         var problem = await sentryResponse.Content.ReadFromJsonAsync<ProblemDetails>(Ct);
         Assert.NotNull(problem);
-        Assert.Equal("Soporte de Sentry disponible próximamente.", problem.Detail);
+        Assert.Equal(CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.NotConfiguredReason, problem.Detail);
 
         using var unauthSubmit = await anonymous.PostAsJsonAsync(
             SubmitManualEventEndpoint.Route,

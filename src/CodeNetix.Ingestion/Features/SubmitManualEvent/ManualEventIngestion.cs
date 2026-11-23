@@ -21,7 +21,8 @@ internal sealed class ManualEventIngestion(
     IGitHubIdentity identity,
     IRepositoryPermissions permissions,
     IEventDispatchSignal dispatchSignal,
-    TimeProvider timeProvider) : IManualEventIngestion
+    TimeProvider timeProvider,
+    ManualSentryEventIngestion? sentry = null) : IManualEventIngestion
 {
     public const string UnauthorizedReason = "no autorizado";
 
@@ -41,7 +42,10 @@ internal sealed class ManualEventIngestion(
         switch (parsed.Kind)
         {
             case ManualUrlKind.Sentry:
-                return ManualEventResult.SentryNotSupported(ManualUrlParser.SentryMessage);
+                // Historia 7.4: incidencia de Sentry → Repositorio objetivo, issue de seguimiento y Evento.
+                return sentry is null
+                    ? ManualEventResult.Unprocessable(CodeNetix.Ingestion.Features.ReadSentryContext.SentryApiOptions.NotConfiguredReason)
+                    : await sentry.SubmitAsync(parsed, requestId, cancellationToken).ConfigureAwait(false);
             case ManualUrlKind.Unsupported:
                 return ManualEventResult.Rejected(ManualUrlParser.UnsupportedMessage);
         }
