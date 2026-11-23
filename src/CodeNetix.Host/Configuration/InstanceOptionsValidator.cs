@@ -60,6 +60,18 @@ internal static class InstanceOptionsValidator
     public const string TooManyWebhookRepositories =
         "CODENETIX__GitHub__WebhookRepositories admite como mucho 100 repositorios.";
 
+    public const string InvalidSentryWebhookSecret =
+        "CODENETIX__Sentry__WebhookSecret debe tener al menos 16 caracteres y ninguno de control (o no definirse para desactivar el webhook de Sentry).";
+
+    public const string InvalidSentryProjectSlug =
+        "CODENETIX__Sentry__Projects contiene un proyecto cuyo nombre no es un slug de Sentry válido (letras, dígitos, '-' y '_', hasta 100 caracteres).";
+
+    public const string TooManySentryProjects =
+        "CODENETIX__Sentry__Projects admite como mucho 100 proyectos.";
+
+    public static string InvalidSentryProjectRepository(string slug) =>
+        $"CODENETIX__Sentry__Projects__{slug} debe ser un repositorio owner/repo.";
+
     public static IReadOnlyList<string> Validate(InstanceOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -175,8 +187,46 @@ internal static class InstanceOptionsValidator
 
         ValidatePolling(options.Polling ?? new PollingInstanceOptions(), reasons);
         ValidateWebhook(options.GitHub ?? new GitHubInstanceOptions(), reasons);
+        ValidateSentry(options.Sentry ?? new SentryInstanceOptions(), reasons);
 
         return reasons;
+    }
+
+    private static void ValidateSentry(SentryInstanceOptions sentry, List<string> reasons)
+    {
+        if (sentry.EffectiveWebhookSecret is { } secret
+            && (secret.Length < GitHubInstanceOptions.MinWebhookSecretLength || secret.Any(char.IsControl)))
+        {
+            reasons.Add(InvalidSentryWebhookSecret);
+        }
+
+        var projects = sentry.Projects ?? [];
+        if (projects.Count > CodeNetix.Ingestion.Features.ReceiveSentryWebhook.SentryWebhookOptions.MaxProjects)
+        {
+            reasons.Add(TooManySentryProjects);
+        }
+
+        var invalidSlug = false;
+        foreach (var (key, value) in projects.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var slug = key.Trim().ToLowerInvariant();
+            if (!CodeNetix.Ingestion.Features.ReceiveSentryWebhook.SentryWebhookOptions.IsProjectSlug(slug))
+            {
+                // El nombre no se cita: puede ser cualquier texto.
+                invalidSlug = true;
+                continue;
+            }
+
+            if (!PollingInstanceOptions.TryParseRepository(value, out _, out _))
+            {
+                reasons.Add(InvalidSentryProjectRepository(slug));
+            }
+        }
+
+        if (invalidSlug)
+        {
+            reasons.Add(InvalidSentryProjectSlug);
+        }
     }
 
     private static void ValidateWebhook(GitHubInstanceOptions gitHub, List<string> reasons)

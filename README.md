@@ -216,6 +216,53 @@ Cómo se comporta:
   `X-GitHub-Delivery` aparece en los logs y en el Evento.
 - `codenetix action` no abre `:5001` ni recibe webhooks.
 
+## Webhooks de Sentry
+
+`codenetix serve` puede recibir los errores nuevos o en regresión de Sentry y trabajar en ellos en el repositorio que
+les corresponde. Usa el mismo puerto `:5001` que el webhook de GitHub y está **desactivado por defecto**.
+
+| Variable | Por defecto |
+| --- | --- |
+| `CODENETIX__Sentry__WebhookSecret` | Vacío (webhook desactivado: `POST /webhooks/sentry` responde `404`). El *Client Secret* de la integración; al menos 16 caracteres |
+| `CODENETIX__Sentry__Projects__<slug>` | Ninguno. `owner/repo` del Repositorio objetivo del proyecto de Sentry `<slug>` (hasta 100 proyectos) |
+
+La correspondencia entre proyectos de Sentry y repositorios **solo** se configura en la instancia (variables de entorno
+o `/config/codenetix.instance.yml`, con `Sentry: { Projects: { front-end: acme/web } }`), nunca en `codenetix.yml`.
+Si el slug lleva guiones y tu shell no admite la variable, pásala con `docker run -e "CODENETIX__Sentry__Projects__front-end=acme/web"`
+o usa el archivo YAML.
+
+1. En Sentry: *Settings → Developer Settings → Custom Integrations → Create New Integration → Internal Integration*:
+   - **Webhook URL:** `https://<tu-host>/webhooks/sentry`
+   - **Permissions:** *Issue & Event* → *Read*
+   - **Webhooks:** marca **issue**
+2. Copia su **Client Secret** en `CODENETIX__Sentry__WebhookSecret` y añade un `CODENETIX__Sentry__Projects__<slug>` por
+   proyecto.
+3. El token de GitHub de la instancia necesita permiso para **crear issues** en cada Repositorio objetivo.
+
+Cómo se comporta:
+
+- Se verifica `Sentry-Hook-Signature` (HMAC SHA-256 del cuerpo con el *Client Secret*); si falta o no coincide, `401` y
+  no se procesa. En modo diagnóstico, `503`; cuerpos de más de 1 MiB, `413`; contenido que no es JSON, `415`.
+- Solo dispara trabajo el recurso `issue` con la acción `created` (incidencia nueva) o `unresolved` por **regresión**
+  (`substatus: regressed`, o reabierta por Sentry y no por una persona). El resto responde `200`
+  `{"result":"ignored","reason":"…"}`.
+- Un proyecto sin correspondencia queda registrado como Evento **ignorado** con el motivo, visible en el Panel
+  (*Historial → Eventos ignorados*) y en `GET /api/events/ignored`.
+- La respuesta (`202`, `{"result":"queued"}`) sale al instante. Después CodeNetix abre en el Repositorio objetivo una
+  **issue de seguimiento** con la etiqueta `codenetix-sentry` (título, origen, nivel y enlace a Sentry, saneados y
+  marcados como datos) y crea el Evento sobre ella: la cadena trabaja con esa issue, el PR la cierra y el aviso final
+  aparece en ella. La issue se reutiliza en las regresiones y nunca se duplica (se busca por un marcador antes de crearla).
+- Deduplicación: `sentry:<issueId>` para la incidencia nueva y `sentry:<issueId>:regression:<n>` para cada regresión;
+  N eventos del mismo error generan como mucho una Ejecución en curso (si hay una, el nuevo Evento queda ignorado por
+  «objeto ocupado»). Una reentrega con el mismo `Request-ID` no crea nada.
+- Autorización: Sentry no tiene un usuario de GitHub. Solo genera trabajo un webhook con firma válida de un proyecto que
+  tú has asociado a un repositorio. El texto del error (que puede contener datos de usuarios de tu aplicación) es siempre
+  dato para los agentes, nunca instrucciones, y el resultado siempre es un PR que revisa una persona.
+- Las entregas pendientes se guardan en memoria (como en GitHub): si CodeNetix se reinicia antes de procesarlas o GitHub
+  no responde tras unos 40 s de reintentos, se descartan con un aviso en el log.
+- `codenetix fix <url-de-sentry>` todavía responde «próximamente»; la traza completa para el Analista llega en una
+  versión posterior.
+
 ## Modo GitHub Action (`codenetix action`)
 
 Dentro de un job de GitHub Actions (runner `ubuntu-*` con Docker), `codenetix action` procesa una issue al etiquetarla

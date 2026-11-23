@@ -51,13 +51,20 @@ internal static partial class IssueCommentSanitizer
         clean = ReferenceDefinition().Replace(clean, string.Empty);
         clean = LinkSyntax().Replace(clean, @"\$0");
 
-        // URL sueltas o relativas al protocolo, menciones y referencias a issues: se rompen con U+200B.
-        clean = clean.Replace("//", "/" + ZeroWidthSpace + "/", StringComparison.Ordinal);
+        return TextLimits.Truncate(BreakReferences(clean).Trim(), maxLength);
+    }
+
+    /// <summary>
+    /// Rompe con U+200B las URL sueltas o relativas al protocolo (<c>//</c>, <c>www.</c>), las menciones (<c>@</c>) y las
+    /// referencias a issues (<c>#123</c>, <c>owner/repo#5</c>, <c>GH-7</c>). También sirve para texto plano, como un título.
+    /// </summary>
+    public static string BreakReferences(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        var clean = text.Replace("//", "/" + ZeroWidthSpace + "/", StringComparison.Ordinal);
         clean = Www().Replace(clean, "$1" + ZeroWidthSpace + ".");
         clean = clean.Replace("@", "@" + ZeroWidthSpace, StringComparison.Ordinal);
-        clean = IssueReference().Replace(clean, "$1" + ZeroWidthSpace);
-
-        return TextLimits.Truncate(clean.Trim(), maxLength);
+        return IssueReference().Replace(clean, "$1" + ZeroWidthSpace);
     }
 
     /// <summary>

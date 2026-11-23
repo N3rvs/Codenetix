@@ -759,6 +759,43 @@ a {
   padding: 0.9rem;
 }
 
+.ignored-events {
+  border-top: 1px solid #1e293b;
+  padding: 0.5rem 0.75rem;
+  max-height: 40%;
+  overflow-y: auto;
+}
+
+.ignored-events-summary {
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.ignored-events-error {
+  margin-top: 0.5rem;
+}
+
+.ignored-events-list {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ignored-event-item {
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  padding: 0.45rem 0.55rem;
+}
+
+.ignored-event-reason {
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
 .run-failure-tag {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.72rem;

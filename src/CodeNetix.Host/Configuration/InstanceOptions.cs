@@ -39,6 +39,43 @@ internal sealed class InstanceOptions
 
     /// <summary>Sondeo de issues etiquetadas (<c>CODENETIX__Polling__*</c>, FR-6). Solo lo usa <c>serve</c>.</summary>
     public PollingInstanceOptions Polling { get; set; } = new();
+
+    /// <summary>Webhook de Sentry y correspondencia proyecto → repositorio (<c>CODENETIX__Sentry__*</c>, FR-7, FR-8). Solo <c>serve</c>.</summary>
+    public SentryInstanceOptions Sentry { get; set; } = new();
+}
+
+internal sealed class SentryInstanceOptions
+{
+    public const string SectionName = InstanceOptions.SectionName + ":Sentry";
+
+    public const string ProjectsKey = SectionName + ":Projects";
+
+    /// <summary>
+    /// <c>CODENETIX__Sentry__WebhookSecret</c>: Client Secret de la integración interna de Sentry. Sin valor,
+    /// <c>:5001/webhooks/sentry</c> está desactivado (404). Con valor, al menos 16 caracteres. Nunca se registra.
+    /// </summary>
+    public string? WebhookSecret { get; set; }
+
+    /// <summary>
+    /// <c>CODENETIX__Sentry__Projects__&lt;slug&gt;=owner/repo</c>: Repositorio objetivo de cada proyecto de Sentry (AD-10: la
+    /// única fuente de la correspondencia). Lo lee Host en crudo (claves sin distinguir mayúsculas).
+    /// </summary>
+    public Dictionary<string, string?> Projects { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public string? EffectiveWebhookSecret => string.IsNullOrWhiteSpace(WebhookSecret) ? null : WebhookSecret.Trim();
+
+    /// <summary>Pares (slug, valor) en crudo de la sección <c>Projects</c>.</summary>
+    public static Dictionary<string, string?> ReadProjects(IConfigurationSection section)
+    {
+        ArgumentNullException.ThrowIfNull(section);
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var child in section.GetChildren())
+        {
+            result[child.Key] = child.Value;
+        }
+
+        return result;
+    }
 }
 
 internal sealed class PollingInstanceOptions

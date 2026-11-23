@@ -308,16 +308,22 @@ public sealed class AccessTests : IDisposable
     // --- Puertos -------------------------------------------------------------------
 
     [Fact]
-    public async Task Webhook_on_5001_when_Ready_is_404_not_available_and_never_401()
+    public async Task Webhook_on_5001_when_Ready_is_404_not_configured_or_unknown_and_never_401()
     {
         await using var factory = CreateFactory();
         _ = factory.Server;
         await WaitForStatusAsync(factory, "Ready");
 
-        var context = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/sentry");
+        var context = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/other");
 
         Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
-        Assert.Contains(ReceiveWebhookEndpoint.SourceNotAvailableTitle, await ReadBodyAsync(context), StringComparison.Ordinal);
+        Assert.Contains(ReceiveWebhookEndpoint.UnknownSourceTitle, await ReadBodyAsync(context), StringComparison.Ordinal);
+
+        // Sentry (7.3) sin CODENETIX__Sentry__WebhookSecret: desactivado, 404 y nunca 401.
+        var sentry = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/sentry");
+
+        Assert.Equal(StatusCodes.Status404NotFound, sentry.Response.StatusCode);
+        Assert.Contains(ReceiveWebhookEndpoint.SentryNotConfiguredTitle, await ReadBodyAsync(sentry), StringComparison.Ordinal);
 
         // GitHub (7.2) sin CODENETIX__GitHub__WebhookSecret: desactivado, 404 y nunca 401.
         var gitHub = await SendAsync(factory, ListenPorts.Webhooks, HttpMethods.Post, "/webhooks/github");
@@ -412,7 +418,7 @@ public sealed class AccessTests : IDisposable
 
         Assert.Equal(StatusCodes.Status404NotFound, context.Response.StatusCode);
         var body = await ReadBodyAsync(context);
-        Assert.DoesNotContain(ReceiveWebhookEndpoint.SourceNotAvailableTitle, body, StringComparison.Ordinal);
+        Assert.DoesNotContain(ReceiveWebhookEndpoint.UnknownSourceTitle, body, StringComparison.Ordinal);
         Assert.DoesNotContain(ReceiveWebhookEndpoint.GitHubNotConfiguredTitle, body, StringComparison.Ordinal);
     }
 

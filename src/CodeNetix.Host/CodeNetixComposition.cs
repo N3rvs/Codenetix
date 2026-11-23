@@ -7,6 +7,7 @@ using CodeNetix.Host.Secrets;
 using CodeNetix.Ingestion;
 using CodeNetix.Ingestion.Features.PollGitHub;
 using CodeNetix.Ingestion.Features.ReceiveGitHubWebhook;
+using CodeNetix.Ingestion.Features.ReceiveSentryWebhook;
 using CodeNetix.Persistence;
 using CodeNetix.Pipeline;
 using CodeNetix.Pipeline.Features.Budget;
@@ -105,6 +106,10 @@ internal static class CodeNetixComposition
                 instance.GitHub ??= new GitHubInstanceOptions();
                 var webhookRepositories = configuration.GetSection(GitHubInstanceOptions.WebhookRepositoriesKey);
                 instance.GitHub.WebhookRepositories = webhookRepositories.Exists() ? PollingInstanceOptions.ReadRepositories(webhookRepositories) : [];
+
+                instance.Sentry ??= new SentryInstanceOptions();
+                var sentryProjects = configuration.GetSection(SentryInstanceOptions.ProjectsKey);
+                instance.Sentry.Projects = sentryProjects.Exists() ? SentryInstanceOptions.ReadProjects(sentryProjects) : new(StringComparer.OrdinalIgnoreCase);
             });
         builder.Services.AddOptions<PricingOptions>()
             .Configure<IOptions<InstanceOptions>>((pricing, instance) =>
@@ -219,6 +224,33 @@ internal static class CodeNetixComposition
                     if (PollingInstanceOptions.TryParseRepository(value, out var owner, out var repo))
                     {
                         webhook.Repositories.Add($"{owner}/{repo}");
+                    }
+                }
+            });
+    }
+
+    /// <summary>
+    /// Webhook de Sentry (FR-7, FR-8), solo en <c>serve</c>: <see cref="SentryWebhookOptions"/> desde
+    /// <c>CODENETIX__Sentry__WebhookSecret</c> (recortado; sin valor, desactivado) y <c>CODENETIX__Sentry__Projects__&lt;slug&gt;</c>
+    /// (slug y owner/repo en minúsculas; los inválidos ya dejan la instancia en <c>Diagnostic</c>).
+    /// </summary>
+    public static void AddSentryWebhooks(this WebApplicationBuilder builder)
+    {
+        ArgumentNullException.ThrowIfNull(builder);
+
+        builder.Services.AddCodeNetixSentryWebhooks();
+        builder.Services.AddOptions<SentryWebhookOptions>()
+            .Configure<IOptions<InstanceOptions>>((webhook, instance) =>
+            {
+                var sentry = instance.Value.Sentry ?? new SentryInstanceOptions();
+                webhook.Secret = sentry.EffectiveWebhookSecret;
+                webhook.Projects.Clear();
+                foreach (var (key, value) in sentry.Projects ?? [])
+                {
+                    var slug = key.Trim().ToLowerInvariant();
+                    if (SentryWebhookOptions.IsProjectSlug(slug) && PollingInstanceOptions.TryParseRepository(value, out var owner, out var repo))
+                    {
+                        webhook.Projects[slug] = new SentryTargetRepository(owner, repo);
                     }
                 }
             });

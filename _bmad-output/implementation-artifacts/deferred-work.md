@@ -63,3 +63,7 @@
 - source_spec: `_bmad-output/implementation-artifacts/spec-7-1-sondeo-de-issues-etiquetadas.md`
   summary: Un rate limit durante la comprobación de permisos del sondeo no activa el backoff del ciclo (se corrige en la siguiente llamada de listado).
   evidence: Añadir indicador de rate limit a `WriteAccess.Unavailable` o mapear 403/429 en `RepositoryPermissions`. Severidad low.
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-7-3-sentry-webhooks-y-correspondencia-con-el-repositorio.md`
+  summary: Si la issue de seguimiento de Sentry se borra o se transfiere, las regresiones siguientes reutilizan `github:o/r#N` y sus Ejecuciones fallan al leer la issue.
+  evidence: Volver a ejecutar `EnsureAsync` cuando la issue reutilizada responde 404. Severidad low.

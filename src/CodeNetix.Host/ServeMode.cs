@@ -6,6 +6,7 @@ using CodeNetix.Host.Features.GetEvent;
 using CodeNetix.Host.Features.GetHealth;
 using CodeNetix.Host.Features.GetRun;
 using CodeNetix.Host.Features.GetRunEvents;
+using CodeNetix.Host.Features.ListIgnoredEvents;
 using CodeNetix.Host.Features.ListRuns;
 using CodeNetix.Host.Features.ReceiveWebhook;
 using CodeNetix.Host.Features.SubmitManualEvent;
@@ -46,6 +47,9 @@ internal static class ServeMode
 
         // Webhook de GitHub (FR-7): solo en serve (:5001); sin CODENETIX__GitHub__WebhookSecret está desactivado.
         builder.AddGitHubWebhooks();
+
+        // Webhook de Sentry (FR-7, FR-8): solo en serve (:5001); sin CODENETIX__Sentry__WebhookSecret está desactivado.
+        builder.AddSentryWebhooks();
 
         builder.Services.AddSingleton<IRunEventPublisher, RunsHubEventPublisher>();
         builder.Services.AddSignalR();
@@ -101,6 +105,7 @@ internal static class ServeMode
         app.MapLlmGateway();
         app.MapSubmitManualEvent();
         app.MapGetEvent();
+        app.MapListIgnoredEvents();
         app.MapListRuns();
         app.MapGetRun();
         app.MapGetRunEvents();

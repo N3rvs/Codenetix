@@ -118,17 +118,22 @@ public sealed partial class ActionModeTests : IDisposable
         var env = Environment(gitHub);
         env["CODENETIX:Polling:Repositories"] = "o/r";
         env["CODENETIX:GitHub:WebhookSecret"] = "webhook-secret-0123456789";
+        env["CODENETIX:Sentry:WebhookSecret"] = "sentry-secret-0123456789";
+        env["CODENETIX:Sentry:Projects:front-end"] = "o/r";
         var registered = true;
 
         var exitCode = await RunAsync(env, harness, configureBuilder: builder =>
             registered = builder.Services.Any(d => d.ImplementationType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPollingService)
                 || d.ServiceType == typeof(CodeNetix.Ingestion.Features.PollGitHub.GitHubPoller)
                 || d.ServiceType == typeof(CodeNetix.Ingestion.Features.ReceiveGitHubWebhook.GitHubWebhookProcessor)
-                || d.ServiceType == typeof(IGitHubWebhookIngestion)));
+                || d.ServiceType == typeof(IGitHubWebhookIngestion)
+                || d.ServiceType == typeof(CodeNetix.Ingestion.Features.ReceiveSentryWebhook.SentryWebhookProcessor)
+                || d.ServiceType == typeof(ISentryWebhookIngestion)));
 
         Assert.True(exitCode == CodeNetixCommandLine.ExitOk, Stdout + Stderr);
         Assert.False(registered);
         Assert.Equal(0, gitHub.AllIssueListCalls);
+        Assert.Equal(0, gitHub.IssuePosts);
     }
 
     // --- Fila 2: Ejecución fallida → Resultado Failed, exit 1, directorio temporal borrado ---
