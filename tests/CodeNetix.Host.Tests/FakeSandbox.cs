@@ -109,9 +109,25 @@ internal sealed class FakeSandboxSession(Guid runId) : ISandboxSession
 /// <summary><see cref="ISandboxHealthCheck"/> falso: sin motivos salvo que se fijen en <see cref="Reasons"/>.</summary>
 internal sealed class FakeSandboxHealthCheck : ISandboxHealthCheck
 {
+    private int _calls;
+
     public IReadOnlyList<string> Reasons { get; set; } = [];
 
-    public Task<IReadOnlyList<string>> CheckAsync(CancellationToken cancellationToken) => Task.FromResult(Reasons);
+    /// <summary>Espera antes de responder (respeta la cancelación, como una comprobación real de Docker).</summary>
+    public TimeSpan Delay { get; set; } = TimeSpan.Zero;
+
+    public int Calls => Volatile.Read(ref _calls);
+
+    public async Task<IReadOnlyList<string>> CheckAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _calls);
+        if (Delay > TimeSpan.Zero)
+        {
+            await Task.Delay(Delay, cancellationToken);
+        }
+
+        return Reasons;
+    }
 }
 
 /// <summary>

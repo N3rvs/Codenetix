@@ -403,6 +403,94 @@
           }
         }
       }
+    },
+    "/api/settings/secrets": {
+      "get": {
+        "tags": [
+          "ConfigureSecretsEndpoint"
+        ],
+        "operationId": "GetSecretsSettings",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretsSettingsResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ConfigureSecretsEndpoint"
+        ],
+        "operationId": "UpdateSecretsSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSecretsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecretsSettingsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unprocessable Entity",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Service Unavailable",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -529,6 +617,13 @@
           "PullRequestCreated",
           "RunFailed",
           "RunCancelled"
+        ]
+      },
+      "PanelSecretId": {
+        "enum": [
+          "GitHubToken",
+          "AnthropicApiKey",
+          "OpenAIApiKey"
         ]
       },
       "ProblemDetails": {
@@ -2141,6 +2236,106 @@
           }
         }
       },
+      "SecretCheckResponse": {
+        "required": [
+          "id",
+          "message"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/PanelSecretId"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "SecretSettingResponse": {
+        "required": [
+          "id",
+          "configured",
+          "source",
+          "editable",
+          "environmentVariable",
+          "hint"
+        ],
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/PanelSecretId"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SecretSource"
+          },
+          "editable": {
+            "type": "boolean"
+          },
+          "environmentVariable": {
+            "type": "string"
+          },
+          "hint": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
+      "SecretSource": {
+        "enum": [
+          "None",
+          "Environment",
+          "ConfigFile",
+          "Panel"
+        ]
+      },
+      "SecretsSettingsResponse": {
+        "required": [
+          "status",
+          "reasons",
+          "keysMissing",
+          "secrets",
+          "notice",
+          "checks"
+        ],
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "keysMissing": {
+            "type": "boolean"
+          },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretSettingResponse"
+            }
+          },
+          "notice": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SecretCheckResponse"
+            }
+          }
+        }
+      },
       "Spec": {
         "required": [
           "problem",
@@ -2335,6 +2530,34 @@
           }
         }
       },
+      "UpdateSecretsRequest": {
+        "required": [
+          "gitHubToken",
+          "anthropicApiKey",
+          "openAIApiKey"
+        ],
+        "type": "object",
+        "properties": {
+          "gitHubToken": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "anthropicApiKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          },
+          "openAIApiKey": {
+            "type": [
+              "null",
+              "string"
+            ]
+          }
+        }
+      },
       "VerdictDecision": {
         "enum": [
           "approved",
@@ -2368,6 +2591,9 @@
     },
     {
       "name": "CancelRunEndpoint"
+    },
+    {
+      "name": "ConfigureSecretsEndpoint"
     }
   ]
 }

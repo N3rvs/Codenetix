@@ -28,7 +28,8 @@ internal sealed partial class StartupReconciler(
     IRunStartupReconciler runReconciler,
     ISandboxReconciler sandboxReconciler,
     IRepositoryWorkspace workspace,
-    ILogger<StartupReconciler> logger) : IHostedService
+    ILogger<StartupReconciler> logger,
+    PanelSecretStore? panelSecrets = null) : IHostedService
 {
     public async Task StartAsync(CancellationToken cancellationToken)
     {
@@ -75,8 +76,15 @@ internal sealed partial class StartupReconciler(
             LogAdminTokenFromFile(tokenStore.FilePath);
         }
 
+        // 1c) Claves guardadas desde el Panel (solo serve, historia 8.1): un archivo ilegible no bloquea, se avisa.
+        if (panelSecrets?.LoadError is { } panelSecretsError)
+        {
+            LogPanelSecretsUnreadable(panelSecretsError);
+        }
+
         // 2) Evaluación de salud: Configuración de instancia y Sandbox (Docker accesible y la imagen presente).
         var reasons = new List<string>(InstanceOptionsValidator.Validate(instanceOptions.Value));
+        var startupReasons = new List<string>();
         reasons.AddRange(await sandboxHealth.CheckAsync(cancellationToken));
 
         // 3) Ejecuciones no terminales -> Failed(HostRestarted), también en Diagnostic (solo toca SQLite y, best-effort, GitHub).
@@ -92,14 +100,18 @@ internal sealed partial class StartupReconciler(
 
             if (result.StillActive > 0)
             {
-                reasons.Add(RunsStillActive(result.StillActive));
+                startupReasons.Add(RunsStillActive(result.StillActive));
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             LogRunsReconcileFailed(ex);
-            reasons.Add(ReconciliationFailed);
+            startupReasons.Add(ReconciliationFailed);
         }
+
+        // Estos motivos solo se resuelven reiniciando: guardar claves desde el Panel no los borra.
+        health.RecordStartupReasons(startupReasons);
+        reasons.AddRange(startupReasons);
 
         // 4) Huérfanos: contenedores codenetix.run y volúmenes codenetix-ws-* (nunca codenetix-tools) y árboles de workspaces/.
         var containersRemoved = 0;
@@ -183,6 +195,9 @@ internal sealed partial class StartupReconciler(
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Limpieza tras reinicio completada: {Containers} contenedor(es), {Volumes} volumen(es) y {Workspaces} árbol(es) de trabajo huérfanos eliminados.")]
     private partial void LogOrphansCleaned(int containers, int volumes, int workspaces);
+
+    [LoggerMessage(Level = LogLevel.Warning, Message = "{Reason}")]
+    private partial void LogPanelSecretsUnreadable(string reason);
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Configuración de instancia completa: CodeNetix está listo.")]
     private partial void LogReady();

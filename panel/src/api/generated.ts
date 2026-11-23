@@ -31,6 +31,8 @@ export type NotAutomatableCategory = "missing_information" | "too_large" | "out_
 
 export type NotificationKind = "NotAutomatable" | "PullRequestCreated" | "RunFailed" | "RunCancelled"
 
+export type PanelSecretId = "GitHubToken" | "AnthropicApiKey" | "OpenAIApiKey"
+
 export interface ProblemDetails {
   type?: string | null
   title?: string | null
@@ -368,6 +370,31 @@ export interface RunVerdict {
   findings: ReviewFinding[]
 }
 
+export interface SecretCheckResponse {
+  id: PanelSecretId
+  message: string
+}
+
+export interface SecretSettingResponse {
+  id: PanelSecretId
+  configured: boolean
+  source: SecretSource
+  editable: boolean
+  environmentVariable: string
+  hint: string | null
+}
+
+export type SecretSource = "None" | "Environment" | "ConfigFile" | "Panel"
+
+export interface SecretsSettingsResponse {
+  status: string
+  reasons: string[]
+  keysMissing: boolean
+  secrets: SecretSettingResponse[]
+  notice: string | null
+  checks: SecretCheckResponse[]
+}
+
 export interface Spec {
   problem: string
   probableCause: string
@@ -408,6 +435,12 @@ export interface TestReport {
   duration: string
   buildOutput?: string | null
   passed?: boolean
+}
+
+export interface UpdateSecretsRequest {
+  gitHubToken: string | null
+  anthropicApiKey: string | null
+  openAIApiKey: string | null
 }
 
 export type VerdictDecision = "approved" | "changes_requested" | "rejected"

@@ -91,3 +91,5 @@ development_status:
   7-3-sentry-webhooks-y-correspondencia-con-el-repositorio: done
   7-4-contexto-de-sentry-para-el-analista: done
   epic-7-retrospective: optional
+  epic-8: done
+  8-1-configuracion-de-claves-desde-el-panel: done

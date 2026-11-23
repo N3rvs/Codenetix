@@ -2,6 +2,7 @@ using CodeNetix.Contracts;
 using CodeNetix.Host.Access;
 using CodeNetix.Host.Configuration;
 using CodeNetix.Host.Features.CancelRun;
+using CodeNetix.Host.Features.ConfigureSecrets;
 using CodeNetix.Host.Features.GetEvent;
 using CodeNetix.Host.Features.GetHealth;
 using CodeNetix.Host.Features.GetRun;
@@ -41,6 +42,9 @@ internal static class ServeMode
         AccessOptionsValidator.EnsureValid(builder.Configuration);
 
         builder.AddCodeNetixServices();
+
+        // Claves desde el Panel (historia 8.1): solo en serve; el entorno y el YAML siguen teniendo prioridad.
+        builder.AddPanelSecrets();
 
         // Sondeo de issues etiquetadas (FR-6): solo en serve; sin repositorios no hace nada.
         builder.AddGitHubPolling();
@@ -110,6 +114,7 @@ internal static class ServeMode
         app.MapGetRun();
         app.MapGetRunEvents();
         app.MapCancelRun();
+        app.MapConfigureSecrets();
         app.MapHub<RunsHub>(RunsHub.Route);
 
         // /api, /hubs y /openapi desconocidos -> 404 (ProblemDetails), nunca index.html.

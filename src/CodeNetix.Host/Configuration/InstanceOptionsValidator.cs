@@ -7,10 +7,10 @@ namespace CodeNetix.Host.Configuration;
 internal static class InstanceOptionsValidator
 {
     public const string MissingGitHubToken =
-        "Falta el token de GitHub: define la variable CODENETIX__GitHub__Token.";
+        "Falta el token de GitHub: pégalo en Configuración del Panel o define la variable CODENETIX__GitHub__Token.";
 
     public const string MissingProviderApiKey =
-        "Falta la key de al menos un Proveedor: define la variable CODENETIX__Providers__<Nombre>__ApiKey (por ejemplo, CODENETIX__Providers__Anthropic__ApiKey).";
+        "Falta la key de al menos un Proveedor: pégala en Configuración del Panel o define la variable CODENETIX__Providers__<Nombre>__ApiKey (por ejemplo, CODENETIX__Providers__Anthropic__ApiKey).";
 
     public const string InvalidMaxReviewRounds =
         "CODENETIX__Limits__MaxReviewRounds debe ser un entero mayor o igual que 1.";
