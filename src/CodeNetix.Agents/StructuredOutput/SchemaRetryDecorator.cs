@@ -83,6 +83,9 @@ internal sealed class SchemaRetryDecorator(IOptions<AgentsOptions> options)
             ResponseFormat = call.StructuredOutput
                 ? ChatResponseFormat.ForJsonSchema(validator.RequestSchema, validator.SchemaName)
                 : null,
+            // Anthropic (API compatible con OpenAI) exige "strict" en json_schema y M.E.AI solo lo envía si se
+            // indica. Se pide sin modo estricto: la respuesta se valida aquí contra el esquema de todos modos.
+            AdditionalProperties = call.StructuredOutput ? new() { ["strict"] = false } : null,
         };
 
         var lastError = string.Empty;

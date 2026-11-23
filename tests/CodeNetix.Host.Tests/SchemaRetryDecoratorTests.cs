@@ -61,6 +61,8 @@ public sealed class SchemaRetryDecoratorTests
         Assert.Equal(SpecSchema.Name, format.SchemaName);
         Assert.Equal("object", format.Schema!.Value.GetProperty("type").GetString());
         Assert.False(format.Schema.Value.TryGetProperty("$schema", out _));
+        // Anthropic rechaza json_schema sin "strict" (HTTP 400): se envía siempre explícito.
+        Assert.Equal(false, call.Options.AdditionalProperties?["strict"]);
     }
 
     [Fact]
@@ -170,6 +172,7 @@ public sealed class SchemaRetryDecoratorTests
         Assert.Equal(1, Assert.IsType<StructuredOutcome<Spec>.Success>(outcome).Attempts);
         var call = Assert.Single(client.Calls);
         Assert.Null(call.Options!.ResponseFormat);
+        Assert.Null(call.Options.AdditionalProperties);
         Assert.Contains("\"acceptanceCriteria\"", call.Messages[0].Text, StringComparison.Ordinal);
         Assert.Contains("JSON Schema", call.Messages[0].Text, StringComparison.Ordinal);
         Assert.DoesNotContain(IssueText, call.Messages[0].Text, StringComparison.Ordinal);
